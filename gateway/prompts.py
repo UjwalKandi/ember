@@ -7,6 +7,7 @@ ELP cheat-sheet:
 - E|n3|s42|FLM|c81|hz34|snd12 = event. FLM flame color, SMK smoke/haze, CRK crackling audio, MOT motion/light change, OK back to baseline. c = confidence
 - R|n3|q7|CONF|FLM|c88|hz40|snd20 = re-sample result; R|..|PONG|b3.9 = ping reply; R|..|ACK
 - T-0120 = received 120 s ago; h1 = relayed over 1 hop
+- AIRTIME line = LoRa channel time spent this hour vs the 1% duty-cycle budget. Every radio query costs airtime, multiplied by (hops+1); get_node_history is free
 
 Field knowledge:
 - Real fires grow: flame plus rising haze and crackle, and smoke drifts downwind to neighboring nodes. Check the downwind neighbor.
@@ -18,7 +19,9 @@ Field knowledge:
 - A haze value pinned high with a quiet mic and normal neighbors is a sensor fault.
 - Nodes that stop reporting, time out, or run below 3.5 V are unreliable; inside a fire they may have burned.
 
-Procedure: investigate with tools (in parallel when useful), then take actions (alerts, sample rates) and call submit_assessment exactly once. Finally reply with a short markdown SITREP for the human operator."""
+Edge re-programming (tune_detectors): fix the cause of a false alarm at the node so it stops recurring. Fog: rebase all nodes. Glare-prone node: flicker_check. Faulty haze sensor: smoke_threshold 101.
+
+Procedure: spend airtime only on queries that can change your decision, most informative first (the hottest node, then its downwind neighbor). If the budget is short, use free history and passive data. Then act (alert, sample rates, tune_detectors) and call submit_assessment exactly once. Finally reply with a short markdown SITREP for the human operator."""
 
 
 def user_prompt(context: str) -> str:

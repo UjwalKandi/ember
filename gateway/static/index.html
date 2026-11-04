@@ -32,6 +32,7 @@
   .t { color: var(--muted); } .E { color: var(--crk); } .H { color: var(--muted); } .R { color: var(--mot); } .C { color: var(--accent); }
   .FLM { color: var(--flm); font-weight: 600; } .SMK { color: var(--smk); font-weight: 600; }
   #trace .call { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--accent); margin-top: 6px; }
+  #trace .call.tune { color: var(--mot); font-weight: 600; }
   #trace .res { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); margin-left: 14px; word-break: break-all; }
   #trace .thought { color: var(--muted); font-style: italic; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
   .verdict { display: inline-block; padding: 3px 10px; border-radius: 6px; font-weight: 700; letter-spacing: .5px; }
@@ -49,6 +50,7 @@
   <h1><span>EMBER</span> · swarm command center</h1>
   <span class="pill" id="mode">connecting…</span>
   <span class="pill" id="agentpill"></span>
+  <span class="pill" id="airtime" title="LoRa channel time spent by the command center this hour vs the 1% duty-cycle budget"></span>
   <span class="spacer"></span>
   <select id="scenario"></select>
   <button id="reset">Load scenario</button>
@@ -150,6 +152,9 @@ function draw() {
     ctx.fillStyle = css('--muted'); ctx.font = '11px ui-monospace, Menlo';
     const meta = (n.code !== 'OK' ? n.code + ' c' + n.conf + ' ' : '') + 'hz' + (n.hz[0] ?? 0) + ' h' + n.hops + (n.batt ? ' ' + n.batt.toFixed(1) + 'V' : '');
     ctx.fillText(meta, x + 14, y + 10);
+    const t = n.tuning || {};
+    const badges = [t.rebase ? 'rebased' : '', t.flk ? 'flicker-check' : '', t.smk === 101 ? 'haze muted' : (t.smk ? 'smk' + t.smk : '')].filter(Boolean);
+    if (badges.length) { ctx.fillStyle = css('--mot'); ctx.fillText('⚙ ' + badges.join(' · '), x + 14, y + 23); }
   }
   // wind arrow
   const w = state.wind, cx = r.width - 60, cy = 60, rad = w.toward_deg * Math.PI / 180;
@@ -208,7 +213,10 @@ function addTrace(ev) {
   const t = $('trace');
   if (ev.kind === 'start') { t.innerHTML = `<div class="t">assessment started (${ev.trigger}, ${ev.agent})</div>`; return; }
   const d = document.createElement('div');
-  if (ev.kind === 'call') { d.className = 'call'; d.textContent = `→ ${ev.name}(${JSON.stringify(ev.args)})`; }
+  if (ev.kind === 'call') {
+    d.className = ev.name === 'tune_detectors' ? 'call tune' : 'call';
+    d.textContent = (ev.name === 'tune_detectors' ? '⚙ re-program edge → ' : '→ ') + `${ev.name}(${JSON.stringify(ev.args)})`;
+  }
   else if (ev.kind === 'result') { d.className = 'res'; d.textContent = `← ${ev.result}`; }
   else if (ev.kind === 'thought') { d.className = 'thought'; d.textContent = ev.text; }
   else if (ev.kind === 'error') { d.className = 'call'; d.style.color = 'var(--flm)'; d.textContent = 'error: ' + ev.text; }
@@ -232,6 +240,11 @@ function applyState(s) {
   $('mode').className = 'pill live';
   $('agentpill').textContent = s.agent === 'llm' ? 'agent: Muse Glimmer' : 'agent: heuristic baseline';
   $('busy').style.display = s.busy ? '' : 'none';
+  if (s.airtime) {
+    const frac = s.airtime.used_s / s.airtime.budget_s;
+    $('airtime').textContent = `airtime ${s.airtime.used_s.toFixed(1)} / ${s.airtime.budget_s}s per hour`;
+    $('airtime').style.color = frac > 0.8 ? 'var(--flm)' : frac > 0.5 ? 'var(--crk)' : 'var(--ok)';
+  }
   $('assess').disabled = s.busy;
   $('auto').checked = s.auto;
 }

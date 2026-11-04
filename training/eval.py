@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,18 +25,41 @@ from gateway.llm import ChatClient  # noqa: E402
 from gateway.policy import HeuristicAgent  # noqa: E402
 
 
+AFTER_S = 300          # after-action window: does the agent's response stop the false alarms?
+
+
+def spurious_after(ep, seconds: float = AFTER_S) -> int:
+    """FLM/SMK events the swarm emits over the next `seconds` (only meaningful when there is no fire)."""
+    n = [0]
+    ep.swarm.listeners.append(lambda e: n.__setitem__(0, n[0] + (e.pkt.type == "E" and e.pkt.code in ("FLM", "SMK"))))
+    ep.net.run(seconds)
+    return n[0]
+
+
 def run_one(spec: Dict[str, Any], args) -> Dict[str, Any]:
-    ep = make_episode(spec["scenario"], spec["seed"])
+    ep = make_episode(spec["scenario"], spec["seed"], spec.get("budget", "generous"))
+    air0 = ep.swarm.airtime_used_ms()
     try:
         if args.agent == "heuristic":
             out = HeuristicAgent(ep.swarm, ep.tools).run()
+        elif args.agent == "oracle":   # SFT teacher: sees simulator ground truth, an upper bound only
+            from training.gen_data import trajectory
+            row = trajectory(ep, random.Random(spec["seed"]))
+            out = {"assessment": ep.tools.assessment, "report": row["messages"][-1]["content"],
+                   "steps": sum(1 for m in row["messages"] if m.get("tool_calls"))}
         else:
             client = ChatClient(args.url, args.model, args.key)
             out = GlimmerAgent(ep.swarm, ep.tools, client).run()
         err = None
     except Exception as e:   # count crashes/timeouts as failures, keep going
         out, err = {"assessment": ep.tools.assessment, "report": "", "steps": 0}, repr(e)
-    return score(ep, out, err)
+    row = score(ep, out, err)
+    row["budget"] = ep.budget
+    row["airtime_s"] = round((ep.swarm.airtime_used_ms() - air0) / 1000, 2)
+    if ep.truth.cause not in ("wildfire", "campfire"):
+        row["spurious_act"] = spurious_after(ep)
+        row["spurious_ctrl"] = spurious_after(make_episode(spec["scenario"], spec["seed"], ep.budget))
+    return row
 
 
 def score(ep, out: Dict[str, Any], err) -> Dict[str, Any]:
@@ -65,6 +89,17 @@ def score(ep, out: Dict[str, Any], err) -> Dict[str, Any]:
     return row
 
 
+def _acc(rows: List[Dict[str, Any]]):
+    return round(sum(r["verdict_ok"] and r["cause_ok"] for r in rows) / len(rows), 3) if rows else None
+
+
+def _reduction(rows: List[Dict[str, Any]]):
+    """1 - (false-alarm events after the agent acted) / (events with no agent), non-fire episodes."""
+    act = sum(r["spurious_act"] for r in rows if "spurious_act" in r)
+    ctrl = sum(r["spurious_ctrl"] for r in rows if "spurious_ctrl" in r)
+    return round(1 - act / ctrl, 3) if ctrl else None
+
+
 def summarize(rows: List[Dict[str, Any]], holdout=()) -> Dict[str, Any]:
     n = len(rows)
     ood = [r for r in rows if r["scenario"] in holdout]
@@ -84,6 +119,11 @@ def summarize(rows: List[Dict[str, Any]], holdout=()) -> Dict[str, Any]:
         "loc_err_m_median": sorted(locs)[len(locs) // 2] if locs else None,
         "unreliable_f1": round(sum(r["unrel_f1"] for r in rows) / n, 3),
         "avg_tool_calls": round(sum(r["tool_calls"] for r in rows) / n, 2),
+        "tight_budget_acc": _acc([r for r in rows if r.get("budget") in ("tight", "exhausted")]),
+        "airtime_s_per_episode": round(sum(r.get("airtime_s", 0) for r in rows) / n, 2),
+        "correct_per_airtime_s": round(sum(r["verdict_ok"] and r["cause_ok"] for r in rows)
+                                       / max(0.01, sum(r.get("airtime_s", 0) for r in rows)), 2),
+        "spurious_event_reduction": _reduction(rows),
         "unseen_composition_acc": round(sum(r["verdict_ok"] and r["cause_ok"] for r in ood) / len(ood), 3)
         if ood else None,
         "per_scenario": {k: round(sum(v) / len(v), 2) for k, v in sorted(per.items())},
@@ -93,7 +133,8 @@ def summarize(rows: List[Dict[str, Any]], holdout=()) -> Dict[str, Any]:
 def report(paths: List[str]) -> None:
     res = [json.load(open(p)) for p in paths]
     keys = ["valid_assessment", "verdict_acc", "cause_acc", "false_alarm_rate", "miss_rate",
-            "loc_err_m_median", "unreliable_f1", "unseen_composition_acc", "avg_tool_calls"]
+            "loc_err_m_median", "unreliable_f1", "unseen_composition_acc", "tight_budget_acc",
+            "airtime_s_per_episode", "correct_per_airtime_s", "spurious_event_reduction", "avg_tool_calls"]
     print("| metric | " + " | ".join(r["name"] for r in res) + " |")
     print("|---|" + "---|" * len(res))
     for k in keys:
@@ -104,7 +145,7 @@ def report(paths: List[str]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", choices=["heuristic", "llm"], default="heuristic")
+    ap.add_argument("--agent", choices=["heuristic", "oracle", "llm"], default="heuristic")
     ap.add_argument("--url")
     ap.add_argument("--model")
     ap.add_argument("--key")
@@ -123,9 +164,9 @@ def main() -> None:
         for s in specs:
             by.setdefault(s["scenario"], []).append(s)
         specs = [s for v in by.values() for s in v[:args.limit]]
-    name = args.name or (args.model if args.agent == "llm" else "heuristic")
+    name = args.name or (args.model if args.agent == "llm" else args.agent)
     t0 = time.time()
-    workers = 1 if args.agent == "heuristic" else args.workers
+    workers = args.workers if args.agent == "llm" else 1
     with ThreadPoolExecutor(workers) as ex:
         rows = list(ex.map(lambda s: run_one(s, args), specs))
     manifest = Path(args.specs).parent / "manifest.json"

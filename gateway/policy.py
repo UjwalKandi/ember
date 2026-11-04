@@ -70,28 +70,54 @@ def downwind_neighbor(swarm: Swarm, nid: int, exclude: List[int]) -> Optional[in
     return best
 
 
-def investigate(swarm: Swarm) -> List[Call]:
-    """First round of tool calls: verify hot nodes, probe downwind, check silent/stuck nodes."""
-    calls: List[Call] = []
+MESH_TOOLS = {"request_confirm": "CONFIRM", "ping_node": "PING"}
+
+
+def investigate_plan(swarm: Swarm) -> Tuple[List[Call], int]:
+    """First round of tool calls, in value-of-information order, priced in LoRa airtime.
+
+    Radio queries are kept only while the duty-cycle budget can still pay for them plus an
+    alert broadcast; local history lookups are free. Returns (calls, skipped radio queries)."""
     hot = hot_nodes(swarm)
     stuck = stuck_nodes(swarm)
-    for nid in [h for h in hot if h not in stuck][:2]:
-        calls.append(("request_confirm", {"node_id": nid}))
-    if not hot:
-        for nid in recent_flame_nodes(swarm)[:1]:
-            calls.append(("request_confirm", {"node_id": nid}))
-    if hot:
-        dw = downwind_neighbor(swarm, hot[0], exclude=hot[:2] + stuck)
+    live_hot = [h for h in hot if h not in stuck]
+    wanted: List[Call] = []
+    if live_hot:
+        wanted.append(("request_confirm", {"node_id": live_hot[0]}))
+        dw = downwind_neighbor(swarm, live_hot[0], exclude=live_hot[:2] + stuck)
         if dw is not None:
-            calls.append(("request_confirm", {"node_id": dw}))
+            wanted.append(("request_confirm", {"node_id": dw}))
+        if len(live_hot) > 1:
+            wanted.append(("request_confirm", {"node_id": live_hot[1]}))
+    elif not hot:
+        for nid in recent_flame_nodes(swarm)[:1]:
+            wanted.append(("request_confirm", {"node_id": nid}))
     for nid in stuck[:1]:
-        calls.append(("get_node_history", {"node_id": nid}))
+        wanted.append(("get_node_history", {"node_id": nid}))
     for nid in silent_nodes(swarm)[:2]:
-        calls.append(("ping_node", {"node_id": nid}))
+        wanted.append(("ping_node", {"node_id": nid}))
     mot = motion_nodes(swarm)
     if mot and not hot:
-        calls.append(("get_node_history", {"node_id": mot[-1]}))
-    return calls
+        wanted.append(("get_node_history", {"node_id": mot[-1]}))
+
+    left = swarm.airtime_left_ms() - swarm.broadcast_cost_ms("ALERT", lvl=2)
+    calls: List[Call] = []
+    skipped = 0
+    for name, args in wanted:
+        if name in MESH_TOOLS:
+            cost = swarm.request_cost_ms(args["node_id"], MESH_TOOLS[name])
+            if cost > left:
+                skipped += 1
+                continue
+            left -= cost
+        calls.append((name, args))
+    if skipped and live_hot and not any(n == "get_node_history" and a["node_id"] == live_hot[0] for n, a in calls):
+        calls.append(("get_node_history", {"node_id": live_hot[0]}))   # free fallback evidence
+    return calls, skipped
+
+
+def investigate(swarm: Swarm) -> List[Call]:
+    return investigate_plan(swarm)[0]
 
 
 def parse_results(calls: List[Call], results: List[str]) -> Dict[str, Dict[int, str]]:
@@ -149,15 +175,31 @@ def estimate_location(swarm: Swarm, ev: Dict[int, Tuple[str, int, int]],
     return None
 
 
+def confirmed_glare(swarm: Swarm, res: Dict[str, Dict[int, str]], ev=None) -> List[int]:
+    """Nodes whose flame detection failed a re-sample and showed no haze."""
+    ev = ev or evidence(swarm, res)
+    confirms = res.get("request_confirm", {})
+    return sorted(nid for nid in set(hot_nodes(swarm) + recent_flame_nodes(swarm))
+                  if nid in confirms and _conf_reading(confirms[nid])[0] == "OK" and ev[nid][2] < 10)
+
+
+def glare_targets(swarm: Swarm, res: Dict[str, Dict[int, str]]) -> List[int]:
+    """Glare-prone nodes: confirmed ones, else flame reports with no haze and no sound."""
+    conf = confirmed_glare(swarm, res)
+    if conf:
+        return conf
+    now = swarm.clock()
+    return sorted({e.src for e in swarm.log if now - e.t <= 600 and e.pkt.type == "E" and e.pkt.code == "FLM"
+                   and e.pkt.get("hz", 0) < 12 and e.pkt.get("snd", 0) < 15})
+
+
 def heuristic_assessment(swarm: Swarm, res: Dict[str, Dict[int, str]]) -> Dict[str, Any]:
     ev = evidence(swarm, res)
     stuck = stuck_nodes(swarm)
     timeouts = [nid for nid, r in res.get("ping_node", {}).items() if "TIMEOUT" in r]
     low_batt = [n.id for n in swarm.nodes.values() if n.batt is not None and n.batt < 3.5]
     unreliable = sorted(set(stuck + timeouts + low_batt))
-    confirms = res.get("request_confirm", {})
-    glare = [nid for nid in set(hot_nodes(swarm) + recent_flame_nodes(swarm))
-             if nid in confirms and _conf_reading(confirms[nid])[0] == "OK" and ev[nid][2] < 10]
+    glare = confirmed_glare(swarm, res, ev)
     hot = [nid for nid, (code, c, hz) in ev.items()
            if code in HOT and nid not in stuck and nid not in glare]
     mot = motion_nodes(swarm)
@@ -189,17 +231,39 @@ def heuristic_assessment(swarm: Swarm, res: Dict[str, Dict[int, str]]) -> Dict[s
 
 # --- actions + reporting -------------------------------------------------------
 
-def actions_for(a: Dict[str, Any]) -> List[Call]:
-    calls: List[Call] = []
+def actions_for(a: Dict[str, Any], swarm: Swarm, res: Dict[str, Dict[int, str]]) -> List[Call]:
+    """Act on the decision: alert, tighten sampling, and re-program node detectors so the
+    same false alarm doesn't recur. Only actions the airtime budget can pay for are kept."""
+    wanted: List[Tuple[Call, float]] = []
+    alive = [n for n in a["affected_nodes"] if n not in a["unreliable_nodes"] and n in swarm.nodes]
     if a["verdict"] == "ALERT":
-        for nid in a["affected_nodes"][:3]:
-            calls.append(("set_sample_rate", {"node_id": nid, "seconds": 5}))
         lvl = 3 if a["severity"] >= 3 else 2
         where = f" near ({a['location']['x']}, {a['location']['y']})" if a.get("location") else ""
-        calls.append(("broadcast_alert", {"level": lvl, "message": f"Wildfire detected{where}. Severity {a['severity']}."}))
+        wanted.append((("broadcast_alert", {"level": lvl, "message": f"Wildfire detected{where}. Severity {a['severity']}."}),
+                       swarm.broadcast_cost_ms("ALERT", lvl=lvl)))
+        for nid in alive[:3]:
+            wanted.append((("set_sample_rate", {"node_id": nid, "seconds": 5}),
+                           swarm.request_cost_ms(nid, "SET", rate=5)))
     elif a["verdict"] == "WATCH":
-        for nid in a["affected_nodes"][:2]:
-            calls.append(("set_sample_rate", {"node_id": nid, "seconds": 10}))
+        for nid in alive[:2]:
+            wanted.append((("set_sample_rate", {"node_id": nid, "seconds": 10}),
+                           swarm.request_cost_ms(nid, "SET", rate=10)))
+    elif a["cause"] == "weather":
+        wanted.append((("tune_detectors", {"node_id": "all", "rebase": True}),
+                       swarm.broadcast_cost_ms("SET", expect_replies=True, rebase=1)))
+    elif a["cause"] == "sun_glare":
+        for nid in glare_targets(swarm, res)[:2]:
+            wanted.append((("tune_detectors", {"node_id": nid, "flicker_check": True}),
+                           swarm.request_cost_ms(nid, "SET", flk=1)))
+    elif a["cause"] == "sensor_fault":
+        for nid in stuck_nodes(swarm)[:2]:
+            wanted.append((("tune_detectors", {"node_id": nid, "smoke_threshold": 101}),
+                           swarm.request_cost_ms(nid, "SET", smk=101)))
+    left, calls = swarm.airtime_left_ms(), []
+    for call, cost in wanted:
+        if cost <= left:
+            calls.append(call)
+            left -= cost
     return calls
 
 
@@ -226,8 +290,16 @@ def summary_line(swarm: Swarm, a: Dict[str, Any]) -> str:
     return s
 
 
+TUNE_TEXT = {
+    "rebase": "re-baselined haze (ambient fog/dust now reads as zero)",
+    "flk": "flame now requires flicker (glare suppression)",
+    "smk": "haze channel muted",
+}
+
+
 def sitrep(swarm: Swarm, a: Dict[str, Any], res: Dict[str, Dict[int, str]],
-           rng: Optional[random.Random] = None) -> str:
+           rng: Optional[random.Random] = None, actions: Optional[List[Call]] = None,
+           spent_ms: float = 0.0, skipped: int = 0) -> str:
     rng = rng or random.Random(0)
     now = swarm.clock()
     lines = [f"## EMBER SITREP: {swarm.area}",
@@ -248,6 +320,18 @@ def sitrep(swarm: Swarm, a: Dict[str, Any], res: Dict[str, Dict[int, str]],
     if ev_lines:
         lines.append("**Evidence gathered:**")
         lines.extend(ev_lines)
+    tunes = [args for name, args in (actions or []) if name == "tune_detectors"]
+    if tunes:
+        lines.append("**Edge re-programming:**")
+        for t in tunes:
+            what = "; ".join(TUNE_TEXT[k] for k, key in (("rebase", "rebase"), ("flk", "flicker_check"),
+                                                          ("smk", "smoke_threshold")) if t.get(key))
+            target = "all nodes" if str(t["node_id"]) == "all" else f"n{t['node_id']}"
+            lines.append(f"- {target}: {what}")
+    air = f"**Airtime:** {spent_ms / 1000:.1f}s spent, {swarm.airtime_left_ms() / 1000:.1f}s left this hour"
+    if skipped:
+        air += f" ({skipped} radio quer{'y' if skipped == 1 else 'ies'} skipped to stay within the duty cycle)"
+    lines.append(air)
     if a["unreliable_nodes"]:
         bad = []
         for nid in a["unreliable_nodes"]:
@@ -283,12 +367,15 @@ class HeuristicAgent:
         self.swarm, self.tools = swarm, toolbox
 
     def run(self, on_step=None) -> Dict[str, Any]:
-        calls = investigate(self.swarm)
+        before = self.swarm.airtime_used_ms()
+        calls, skipped = investigate_plan(self.swarm)
         results = [self.tools.call(n, a) for n, a in calls]
         res = parse_results(calls, results)
         a = heuristic_assessment(self.swarm, res)
-        for n, args in actions_for(a):
+        acts = actions_for(a, self.swarm, res)
+        for n, args in acts:
             self.tools.call(n, args)
         self.tools.call("submit_assessment", a)
-        report = sitrep(self.swarm, a, res)
+        report = sitrep(self.swarm, a, res, actions=acts,
+                        spent_ms=self.swarm.airtime_used_ms() - before, skipped=skipped)
         return {"assessment": self.tools.assessment, "report": report, "steps": len(calls)}

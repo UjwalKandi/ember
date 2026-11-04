@@ -140,6 +140,14 @@ def _check_data():
         lens.append(len(tok(text, add_special_tokens=False)["input_ids"]))
     lens.sort()
     print(f"tokens/example p50={lens[len(lens) // 2]} p95={lens[int(len(lens) * .95)]} max={lens[-1]}")
+    probe = Path("/data/token_probe.jsonl")
+    if probe.exists():
+        elp = js = 0
+        for line in open(probe):
+            r = json.loads(line)
+            elp += len(tok(r["elp"], add_special_tokens=False)["input_ids"])
+            js += len(tok(r["json"], add_special_tokens=False)["input_ids"])
+        print(f"ELP vs JSON telemetry, Muse Glimmer tokens: {elp} vs {js} ({js / elp:.2f}x fewer with ELP)")
     if lens[-1] > SEQ_LEN:
         raise SystemExit(f"{sum(l > SEQ_LEN for l in lens)} examples exceed {SEQ_LEN} tokens")
 

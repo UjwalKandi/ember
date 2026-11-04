@@ -12,5 +12,8 @@ struct Reading {
 
 bool begin();
 Reading sample();
+// Adopt the current scene contrast as the haze baseline (gateway `SET|rebase1`), so the
+// present ambient haze (fog, dust) reads ~0 from now on.
+void rebase();
 
 }  // namespace cam

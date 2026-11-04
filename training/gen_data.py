@@ -77,15 +77,19 @@ def _step(msgs: List[dict], ep: Episode, name: str, args: Dict[str, Any]) -> str
 def trajectory(ep: Episode, rng: random.Random) -> Dict[str, Any]:
     msgs: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt(ep.swarm.context())}]
-    inv = policy.investigate(ep.swarm)
+    before = ep.swarm.airtime_used_ms()
+    inv, skipped = policy.investigate_plan(ep.swarm)
     results = [_step(msgs, ep, n, a) for n, a in inv]
     res = policy.parse_results(inv, results)
     a = teacher_assessment(ep, res, rng)
-    for n, args in policy.actions_for(a) + [("submit_assessment", a)]:
+    acts = policy.actions_for(a, ep.swarm, res)
+    for n, args in acts + [("submit_assessment", a)]:
         _step(msgs, ep, n, args)
-    msgs.append({"role": "assistant", "content": policy.sitrep(ep.swarm, a, res, rng)})
+    msgs.append({"role": "assistant", "content": policy.sitrep(
+        ep.swarm, a, res, rng, actions=acts, spent_ms=ep.swarm.airtime_used_ms() - before, skipped=skipped)})
     return {"messages": msgs, "tools": TOOL_SCHEMAS,
-            "meta": {"scenario": ep.scenario, "seed": ep.seed, "verdict": a["verdict"], "cause": a["cause"]}}
+            "meta": {"scenario": ep.scenario, "seed": ep.seed, "budget": ep.budget,
+                     "verdict": a["verdict"], "cause": a["cause"]}}
 
 
 def main() -> None:
@@ -104,6 +108,7 @@ def main() -> None:
             row = trajectory(make_episode(sc, seed), rng)
             rows.append(row)
             stats[(row["meta"]["verdict"], row["meta"]["cause"])] += 1
+            stats[("budget", row["meta"]["budget"])] += 1
     rng.shuffle(rows)
     n_val = max(1, int(len(rows) * args.val_frac))
     for name, part in (("val", rows[:n_val]), ("train", rows[n_val:])):
@@ -113,7 +118,13 @@ def main() -> None:
     with open(out / "eval_scenarios.jsonl", "w") as f:
         for sc in sim.SCENARIOS:
             for i in range(args.eval_per_scenario):
-                f.write(json.dumps({"scenario": sc, "seed": EVAL_SEED_OFFSET + i}) + "\n")
+                budget = "generous" if i % 3 < 2 else ("tight" if i % 6 == 2 else "exhausted")
+                f.write(json.dumps({"scenario": sc, "seed": EVAL_SEED_OFFSET + i, "budget": budget}) + "\n")
+    with open(out / "token_probe.jsonl", "w") as f:      # ELP vs JSON telemetry, tokenized on Modal
+        for sc in sim.SCENARIOS:
+            for seed in range(5):
+                ep = make_episode(sc, 50_000 + seed)
+                f.write(json.dumps({"elp": ep.swarm.context(), "json": ep.swarm.context_json()}) + "\n")
     json.dump({"holdout": list(HOLDOUT), "train_scenarios": [s for s in sim.SCENARIOS if s not in HOLDOUT]},
               open(out / "manifest.json", "w"), indent=1)
     chars = sorted(sum(len(m.get("content") or json.dumps(m.get("tool_calls"))) for m in r["messages"]) for r in rows)

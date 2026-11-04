@@ -14,9 +14,11 @@ namespace {
 
 // Event codes in priority order with one threshold each (no hysteresis). These match
 // gateway/sim.py SimNetwork.classify, the distribution Muse Glimmer was trained on.
+// The SMK threshold is runtime-tunable by the command center (SET|smk<N>, 101 = muted).
 enum Code { OK = 0, FLM, SMK, CRK, MOT };
 const char *CODE_NAMES[] = {"OK", "FLM", "SMK", "CRK", "MOT"};
-const uint8_t THRESHOLD[] = {0, 40, 25, 40, 40};
+uint8_t THRESHOLD[] = {0, 40, 25, 40, 40};
+constexpr uint8_t SMK_MUTED = 101;
 constexpr uint8_t REPORT_DELTA = 15;     // re-send same code if confidence moves this much
 constexpr uint8_t GLARE_FLICKER = 8;     // flame burst spread below this = static glare
 constexpr uint32_t SAMPLE_MS = 1000;
@@ -34,6 +36,9 @@ struct PendingCmd {
   char cmd[12];
   int rate;
   int lvl;
+  int smk;     // SET|smk<N>, -1 = unchanged
+  int flk;     // SET|flk<0|1>, -1 = unchanged
+  bool rebase; // SET|rebase1
 };
 
 uint32_t seq = 0;
@@ -49,6 +54,14 @@ uint8_t pendingCount = 0;
 
 PendingCmd cmdQueue[4];
 int alertLevel = 0;
+
+// SET|flk1: in normal sampling, FLM also requires flicker (same glare rule as CONFIRM), set by
+// the command center on glare-prone nodes. Steadiness is judged over the flame-hot samples in
+// the last 5, so a glare dropout frame doesn't break the window and toggle FLM/OK.
+constexpr uint8_t FLAME_HIST = 5;
+bool flickerCheck = false;
+uint8_t flameHist[FLAME_HIST] = {};
+uint8_t flameHistIdx = 0;
 
 // "|b3.9", or "" when no divider is fitted (a fake 0.0 V would read as a dying node).
 void battToken(char *out, size_t n) {
@@ -108,6 +121,19 @@ void tick() {
   Scores sc = measure(MIC_WINDOW_MS);
   maxHaze = max(maxHaze, sc.haze);
   maxSnd = max(maxSnd, sc.snd);
+  flameHist[flameHistIdx] = sc.s[FLM];
+  flameHistIdx = (flameHistIdx + 1) % FLAME_HIST;
+  if (flickerCheck && sc.s[FLM] >= THRESHOLD[FLM]) {
+    uint8_t lo = 255, hi = 0, hot = 0;
+    for (uint8_t v : flameHist) {
+      if (v < THRESHOLD[FLM]) continue;
+      hot++;
+      lo = min(lo, v);
+      hi = max(hi, v);
+    }
+    // no FLM until 3 hot samples prove flicker (~3 s delay, only on glare-tuned nodes)
+    if (hot < 3 || hi - lo < GLARE_FLICKER) sc.s[FLM] = 0;
+  }
 
   Code cand = classify(sc);
   if (cand == active) {
@@ -136,7 +162,7 @@ void onFrame(const mesh::Frame &f) {
   strncpy(buf, f.body, sizeof(buf));
   buf[sizeof(buf) - 1] = '\0';
 
-  PendingCmd cmd = {true, millis(), -1, "", -1, -1};
+  PendingCmd cmd = {true, millis(), -1, "", -1, -1, -1, -1, false};
   char *save = nullptr;
   int idx = 0;
   for (char *tok = strtok_r(buf, "|", &save); tok; tok = strtok_r(nullptr, "|", &save), idx++) {
@@ -151,6 +177,9 @@ void onFrame(const mesh::Frame &f) {
     if (tok[0] == 'q' && isdigit(tok[1])) cmd.qid = atoi(tok + 1);
     else if (strncmp(tok, "rate", 4) == 0) cmd.rate = atoi(tok + 4);
     else if (strncmp(tok, "lvl", 3) == 0) cmd.lvl = atoi(tok + 3);
+    else if (strncmp(tok, "smk", 3) == 0) cmd.smk = atoi(tok + 3);
+    else if (strncmp(tok, "flk", 3) == 0) cmd.flk = atoi(tok + 3);
+    else if (strncmp(tok, "rebase", 6) == 0) cmd.rebase = atoi(tok + 6) == 1;
     else if (isupper(tok[0]) && cmd.cmd[0] == '\0') strncpy(cmd.cmd, tok, sizeof(cmd.cmd) - 1);
   }
   if (cmd.cmd[0] == '\0') return;
@@ -201,8 +230,12 @@ void runCommand(const PendingCmd &cmd) {
   } else if (strcmp(cmd.cmd, "CONFIRM") == 0) {
     confirm(cmd.qid);
   } else if (strcmp(cmd.cmd, "SET") == 0) {
+    // Edge re-programming: the command center retunes this node's detectors in place.
     // rate sets the heartbeat interval; detection sampling stays at 1 Hz for latency.
     if (cmd.rate > 0) heartbeatS = constrain(cmd.rate, 5, 600);
+    if (cmd.smk >= 0) THRESHOLD[SMK] = constrain(cmd.smk, 0, SMK_MUTED);
+    if (cmd.flk >= 0) flickerCheck = cmd.flk == 1;
+    if (cmd.rebase && camOk) cam::rebase();
     snprintf(body, sizeof(body), "R|n%d|q%d|ACK", NODE_ID, cmd.qid);
     send(body);
   } else if (strcmp(cmd.cmd, "ALERT") == 0) {

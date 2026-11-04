@@ -58,13 +58,13 @@ token  := key value                 (e.g. s42, c81, hz34, b3.9)
 `c` = detector confidence 0-100, `hz` = haze 0-100, `snd` = sound 0-100.
 
 ### C: command (gateway → node)
-`C|n3|q7|PING`, `C|n3|q7|CONFIRM`, `C|n3|q7|SET|rate5`, `C|*|q8|ALERT|lvl2`
+`C|n3|q7|PING`, `C|n3|q7|CONFIRM`, `C|n3|q7|SET|rate5`, `C|*|q9|SET|rebase1`, `C|n3|q7|SET|smk40|flk1`, `C|*|q8|ALERT|lvl2`
 
 | command | effect |
 |---|---|
 | PING    | node replies `PONG` with battery |
 | CONFIRM | node re-samples camera + mic for ~3 s and reports the result |
-| SET     | `rate<N>`: heartbeat/sampling interval in seconds |
+| SET     | edge re-programming, any combination: `rate<N>` heartbeat interval s; `smk<N>` SMK haze threshold (default 25, `101` = haze muted); `flk<0/1>` FLM requires flicker across the flame-hot samples in the last 5 (glare suppression); `rebase1` adopt current scene as haze baseline (ambient fog/dust → ~0). RAM only |
 | ALERT   | `lvl0-3`: node shows alert (LED pattern); broadcast to all |
 
 `q` = query id chosen by the gateway; responses echo it.

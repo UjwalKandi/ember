@@ -118,6 +118,58 @@ class TrainingDataTests(unittest.TestCase):
         self.assertTrue(set(HOLDOUT) <= set(sim.SCENARIOS))
 
 
+class AirtimeTests(unittest.TestCase):
+    def test_semtech_reference(self):
+        from gateway.airtime import LoRaPreset, time_on_air_ms
+        # well-known reference: 20 B at SF7 / 125 kHz / CR4/5 / 8-symbol preamble = 56.6 ms
+        self.assertAlmostEqual(time_on_air_ms(20, LoRaPreset(sf=7, bw_hz=125_000, preamble=8)), 56.6, delta=2.8)
+
+    def test_hops_multiply(self):
+        from gateway.airtime import packet_ms
+        self.assertAlmostEqual(packet_ms("C|n3|q7|CONFIRM", 2), 3 * packet_ms("C|n3|q7|CONFIRM", 0))
+
+    def test_exhausted_budget_refuses_radio_but_not_history(self):
+        ep = make_episode("wildfire", 1, budget="exhausted")
+        self.assertIn("airtime budget exhausted", ep.tools.call("request_confirm", {"node_id": 1}))
+        self.assertIn("packets", ep.tools.call("get_node_history", {"node_id": 1}))
+
+    def test_tight_budget_limits_radio_queries(self):
+        for sc in ("wildfire", "fog", "sun_glare"):
+            ep = make_episode(sc, 4, budget="tight")
+            calls, _ = policy.investigate_plan(ep.swarm)
+            self.assertLessEqual(sum(n in policy.MESH_TOOLS for n, _ in calls), 1, sc)
+
+
+class EdgeTuningTests(unittest.TestCase):
+    def _after(self, ep, seconds=300):
+        from training.eval import spurious_after
+        return spurious_after(ep, seconds)
+
+    def test_rebase_stops_fog_false_alarms(self):
+        ep = make_episode("fog", 100001, budget="generous")
+        out = json.loads(ep.tools.call("tune_detectors", {"node_id": "all", "rebase": True}))
+        self.assertEqual(len(out["acked"]), len(ep.net.nodes))
+        control = make_episode("fog", 100001, budget="generous")
+        self.assertLess(self._after(ep), self._after(control))
+
+    def test_flicker_check_suppresses_glare(self):
+        ep = make_episode("sun_glare", 100002, budget="generous")
+        glare = next(n.id for n in ep.net.nodes.values() if n.glare)
+        ep.tools.call("tune_detectors", {"node_id": glare, "flicker_check": True})
+        self.assertTrue(ep.swarm.nodes[glare].tuning.get("flk"))
+        control = make_episode("sun_glare", 100002, budget="generous")
+        self.assertLessEqual(self._after(ep), self._after(control))
+
+    def test_teacher_reprograms_edge_for_false_alarm_causes(self):
+        want = {"fog": "rebase", "sun_glare": "flicker_check", "stuck_sensor": "smoke_threshold"}
+        for sc, key in want.items():
+            row = trajectory(make_episode(sc, 7, budget="generous"), random.Random(0))
+            tunes = [c["function"]["arguments"] for m in row["messages"] for c in m.get("tool_calls", [])
+                     if c["function"]["name"] == "tune_detectors"]
+            if row["meta"]["cause"] in ("weather", "sun_glare", "sensor_fault"):
+                self.assertTrue(any(key in t for t in tunes), sc)
+
+
 class ReplayClient:
     """Fake LLM that replays a teacher trajectory, one assistant turn per call."""
     def __init__(self, row):

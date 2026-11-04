@@ -1,51 +1,71 @@
 # EMBER: Edge Mesh for Burn Early-warning & Reporting
 
-**A swarm of $15 camera nodes on a Meshtastic-style mesh, commanded by a fine-tuned Muse Glimmer that investigates, decides, and writes the incident report.**
+**Existing wildfire networks detect. EMBER investigates, and re-programs its own sensors while doing it.**
 
-Wildfires start where there is no cell coverage and no one watching. EMBER puts cheap XIAO ESP32-S3 Sense nodes (camera + microphone) across a forest or field. Nodes detect flame, smoke, crackling and motion **on-device** and send tiny coded packets over a multi-hop, low-bandwidth mesh. At the command center, **Muse Glimmer** (fine-tuned for this protocol) reads the packets, **interrogates the swarm through tools** (re-sample a node, check the downwind neighbor, ping a silent node), decides between **ALERT / WATCH / DISMISS**, broadcasts alerts back into the mesh, and writes a situation report for the operator.
+EMBER is an **agentic sensor mesh**. Cheap XIAO ESP32-S3 Sense nodes (camera + microphone) detect flame, smoke, crackling and motion on-device and send 30-byte coded packets over a multi-hop, Meshtastic-class radio mesh. A **fine-tuned Muse Glimmer** at the command center doesn't just read that telemetry. It runs a closed loop through the radio:
+- **interrogates** nodes (re-sample this one, probe the downwind neighbor),
+- **pays for every question in LoRa airtime**,
+- decides **ALERT / WATCH / DISMISS**,
+- **re-programs the nodes' on-device detectors** so the same false alarm doesn't happen again,
+- writes the incident report.
 
-> Hackathon track: **Push the Frontier**: give a machine network a new capability by putting Meta's model in the loop of a physical sensing system.
+> Hackathon track: **Push the Frontier**: a language model in the control loop of a physical sensing network.
+
+## What's new
+
+| | Existing systems | EMBER |
+|---|---|---|
+| **Sensing loop** | Passive: sensor → threshold/ML → alert (e.g. Dryad Silvanet's LoRaWAN gas-sensor mesh, AI camera towers) | **Active perception:** the model chooses which node to question next, using wind physics (smoke drifts downwind, so ask the downwind neighbor) |
+| **LLM + Meshtastic** | Chatbots: people text an LLM over the mesh (radio-llm, LORACLE and ~45 similar repos) | The LLM **operates the mesh**: reads raw telemetry, sends commands, gets answers back over the radio |
+| **Bandwidth** | Ignored, or handled by fixed reporting intervals | **Airtime-aware agent:** every query is priced with the Semtech LoRa time-on-air formula × relay hops, against a 1% duty-cycle budget. The model learns value of information: under tight budgets it asks one question or uses free history |
+| **Edge behavior** | Fixed firmware thresholds; false alarms repeat | **The model re-programs the edge:** fog → re-baseline haze swarm-wide; glare-prone node → require flame flicker; faulty sensor → mute it. Measured: in held-out sim episodes, after-action false-alarm events drop 126 → 0 (fog) and 20 → 1 (glare) when the right retune is sent |
+| **Wire format** | JSON / protobuf telemetry | **Ember Link Protocol**, co-designed so the model reads raw packets natively: 2.6× smaller than equivalent JSON |
+| **Training data** | Human-labelled incidents (rare, expensive) | **Physics digital twin → specialist model:** fire spread + smoke plume + false-alarm simulator generates ground-truth agent trajectories; zero human labels |
 
 ## How it works
 
 ```
  [XIAO node]~~ESP-NOW flood mesh (≤200 B, TTL 3)~~[XIAO node]~~...~~[gateway XIAO]==USB==[laptop: command center]
   camera → flame ratio, haze index, motion                              │  gateway/  (Python, stdlib only)
-  mic    → sound level, crackle transients                              │   swarm state + compact context
-  E|n3|s42|FLM|c81|hz34|snd12                                           │   tools: confirm / ping / set rate / alert
+  mic    → sound level, crackle transients                              │   swarm state + airtime ledger
+  E|n3|s42|FLM|c81|hz34|snd12                                           │   tools: confirm / ping / history /
+  C|*|q9|SET|rebase1   ◄── edge re-programming ──────────────────────── │          tune_detectors / alert
                                                                         ▼
                                                            Muse Glimmer (fine-tuned, vLLM on Modal)
-                                                           → tool calls back over the mesh
+                                                           → airtime-priced tool calls over the mesh
                                                            → submit_assessment + SITREP
 ```
 
-**The core idea:** ESP32s can't run an LLM and a LoRa-class link can't carry images. So the nodes reduce the world to the compact **Ember Link Protocol** ([protocol/SPEC.md](protocol/SPEC.md)), and we **supervised-fine-tune Muse Glimmer to think in that language**: reading raw packets, knowing which follow-up questions to ask the swarm, and separating real fires from look-alikes (campfires, sun glare, vehicle tail-lights and dust, fog, stuck sensors, dead nodes).
+**The core idea:** ESP32s can't run an LLM and a LoRa-class link can't carry images. So the nodes reduce the world to the compact **Ember Link Protocol** ([protocol/SPEC.md](protocol/SPEC.md)), and we **supervised-fine-tune Muse Glimmer to think and act in that language**. It reads raw packets, knows which question is worth its airtime, separates real fires from look-alikes (campfires, sun glare, vehicle tail-lights and dust, fog, stuck sensors, dead nodes), and fixes the look-alikes at the source by re-tuning the nodes.
 
-**Meshtastic-ready:** the boards we have don't carry LoRa radios, so the transport is ESP-NOW with Meshtastic's constraints (≤200 B payloads, managed flooding, hop limit 3, duplicate suppression). Swapping in a Wio-SX1262 + Meshtastic only replaces `firmware/src/mesh.cpp`; nothing above it changes.
+**Meshtastic-ready:** the boards we have don't carry LoRa radios, so the transport is ESP-NOW with Meshtastic's constraints (≤200 B payloads, managed flooding, hop limit 3, duplicate suppression), and airtime is priced as if on LoRa LongFast. Swapping in a Wio-SX1262 + Meshtastic only replaces `firmware/src/mesh.cpp`; nothing above it changes.
 
 ## Training Muse Glimmer
 
 | step | what | where |
 |---|---|---|
 | simulate | 14 scenarios (wildfire variants, campfire, sun glare, vehicle, dusty road, fog, fire-in-fog, stuck sensor, dying node, …) on random node grids with wind, packet loss and multi-hop | `gateway/sim.py` |
-| label | ground truth from the simulator; tool-use skeleton from an observation-only policy | `training/gen_data.py` |
+| label | ground truth from the simulator; airtime-priced, value-of-information tool-use skeleton from an observation-only policy; edge re-programming actions | `training/gen_data.py` |
 | format | OpenAI `messages`, one tool call per assistant message (Muse Glimmer's format), arguments as dicts, + tool schemas; ~2.4k trajectories | `data/*.jsonl` |
 | train | Axolotl QLoRA on 1×H100 (Modal): cookbook hyperparameters on Axolotl's text-only tool-calling path, 8k context | `training/modal_app.py` |
 | serve | merged checkpoint on the `vllm/vllm-openai:muse-glimmer` image, `muse_glimmer` tool + reasoning parsers | `training/modal_app.py` |
-| evaluate | 420 held-out episodes: verdict/cause accuracy, false alarms, misses, localization, node-health F1 | `training/eval.py` |
+| evaluate | 420 held-out episodes: verdict/cause accuracy, false alarms, misses, localization, node-health F1, accuracy under tight airtime, false-alarm events in the 5 min after acting (vs a no-action replay of the same seed) | `training/eval.py` |
 
-### Results (held-out, 420 episodes)
+### Results (held-out, 420 episodes; 1/3 under tight or exhausted airtime budgets)
 
-`wildfire_plus_stuck` and `wildfire_in_fog` are **never seen in training**. They test whether the model generalizes to new combinations of situations it did see.
+`wildfire_plus_stuck` and `wildfire_in_fog` are **never seen in training**. They test generalization to new combinations. The **oracle** is the SFT teacher with access to simulator ground truth; it is an upper bound, not a competitor.
 
-| metric | rule-based baseline | Muse Glimmer (base) | **EMBER (fine-tuned)** |
-|---|---|---|---|
-| verdict accuracy | 0.921 | _pending_ | _pending_ |
-| cause accuracy | 0.876 | | |
-| false-alarm rate | 0.125 | | |
-| missed fires | 0.006 | | |
-| unseen compositions | 1.00 (rules don't train) | | |
-| fog / dusty-road / vehicle cases | 0.00 / 0.67 / 0.70 | | |
+| metric | rule-based baseline | Muse Glimmer (base) | **EMBER (fine-tuned)** | oracle (upper bound) |
+|---|---|---|---|---|
+| verdict accuracy | 0.907 | _pending_ | _pending_ | 1.000 |
+| cause accuracy | 0.848 | | | 1.000 |
+| false-alarm rate | 0.125 | | | 0.000 |
+| missed fires | 0.000 | | | 0.000 |
+| accuracy under tight airtime | 0.814 | | | 1.000 |
+| false-alarm events after acting (reduction) | 9.7% | | | 67.6% |
+| correct decisions per airtime-second | 0.18 | | | 0.21 |
+| unseen compositions | 1.00 (rules don't train) | | | 1.00 |
+| fog / dusty-road / vehicle cases | 0.00 / 0.67 / 0.70 | | | 1.00 / 1.00 / 1.00 |
 
 Regenerate: `python -m training.eval --report results/*.json`
 

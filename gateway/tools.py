@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional
 
-from .swarm import Swarm
+from .swarm import AirtimeExhausted, Swarm
 
 VERDICTS = ("ALERT", "WATCH", "DISMISS")
 CAUSES = ("wildfire", "campfire", "sun_glare", "vehicle", "sensor_fault", "weather", "none")
@@ -32,6 +32,17 @@ TOOL_SCHEMAS: List[dict] = [
         "parameters": {"type": "object", "properties": {
             "node_id": _node,
             "seconds": {"type": "integer", "description": "5-120"}}, "required": ["node_id", "seconds"]}}},
+    {"type": "function", "function": {
+        "name": "tune_detectors",
+        "description": "Re-program the on-device detectors of one node or all nodes over the mesh. "
+                       "rebase=true adopts the current scene as the haze baseline (removes ambient fog/dust); "
+                       "smoke_threshold sets the haze level that triggers SMK (default 25, 101 mutes a faulty "
+                       "haze sensor); flicker_check=true makes FLM require flame flicker (suppresses glare).",
+        "parameters": {"type": "object", "properties": {
+            "node_id": {"type": ["integer", "string"], "description": "Node id, or \"all\" to broadcast"},
+            "rebase": {"type": "boolean"},
+            "smoke_threshold": {"type": "integer", "description": "25-101"},
+            "flicker_check": {"type": "boolean"}}, "required": ["node_id"]}}},
     {"type": "function", "function": {
         "name": "broadcast_alert",
         "description": "Flood an alert to every node in the mesh (nodes flash their LEDs; field crews see it).",
@@ -76,6 +87,8 @@ class Toolbox:
                 out = fn(**args)
             except TypeError as e:
                 out = {"error": f"bad arguments for {name}: {e}"}
+            except AirtimeExhausted as e:
+                out = {"error": f"airtime budget exhausted: {e}. Decide from passive data and free tools."}
             except (KeyError, ValueError) as e:
                 out = {"error": str(e)}
         result = json.dumps(out, separators=(",", ":"))
@@ -96,29 +109,59 @@ class Toolbox:
         return {"node": nid, "packets": [f"T-{int(now - e.t):04d} {e.pkt.raw or e.pkt.encode()}" for e in hist]
                 or ["(no packets received)"]}
 
+    def _mesh(self, nid: int, cmd: str, **args) -> dict:
+        """One request/response over the mesh, reported with the airtime it cost."""
+        before = self.swarm.airtime_used_ms()
+        r = self.swarm.request(nid, cmd, self.timeout, **args)
+        return {"node": nid, "reply": r.encode() if r else f"TIMEOUT after {self.timeout:.0f}s",
+                "airtime_ms": round(self.swarm.airtime_used_ms() - before)}
+
     def _t_ping_node(self, node_id: int) -> dict:
-        nid = self._check(node_id)
-        r = self.swarm.request(nid, "PING", self.timeout)
-        return {"node": nid, "reply": r.encode() if r else f"TIMEOUT after {self.timeout:.0f}s"}
+        return self._mesh(self._check(node_id), "PING")
 
     def _t_request_confirm(self, node_id: int) -> dict:
-        nid = self._check(node_id)
-        r = self.swarm.request(nid, "CONFIRM", self.timeout)
-        return {"node": nid, "reply": r.encode() if r else f"TIMEOUT after {self.timeout:.0f}s"}
+        return self._mesh(self._check(node_id), "CONFIRM")
 
     def _t_set_sample_rate(self, node_id: int, seconds: int) -> dict:
         nid = self._check(node_id)
         seconds = max(5, min(120, int(seconds)))
-        r = self.swarm.request(nid, "SET", self.timeout, rate=seconds)
-        if r:
+        out = self._mesh(nid, "SET", rate=seconds)
+        if not out["reply"].startswith("TIMEOUT"):
             self.swarm.nodes[nid].rate = seconds
-        return {"node": nid, "reply": r.encode() if r else f"TIMEOUT after {self.timeout:.0f}s"}
+        return out
+
+    def _t_tune_detectors(self, node_id: Any, rebase: bool = False, smoke_threshold: Optional[int] = None,
+                          flicker_check: Optional[bool] = None) -> dict:
+        args: Dict[str, int] = {}
+        if rebase:
+            args["rebase"] = 1
+        if smoke_threshold is not None:
+            args["smk"] = max(0, min(101, int(smoke_threshold)))
+        if flicker_check is not None:
+            args["flk"] = int(bool(flicker_check))
+        if not args:
+            raise ValueError("nothing to tune: pass rebase, smoke_threshold or flicker_check")
+        before = self.swarm.airtime_used_ms()
+        if str(node_id).lower() in ("all", "*"):
+            qid, replies = self.swarm.broadcast("SET", collect_s=3.0, **args)
+            acked = sorted({r.node for r in replies})
+            for nid in acked:
+                self.swarm.nodes[nid].tuning.update(args)
+            return {"sent": f"C|*|q{qid}|SET|" + "|".join(f"{k}{v}" for k, v in args.items()),
+                    "acked": acked, "airtime_ms": round(self.swarm.airtime_used_ms() - before)}
+        nid = self._check(node_id)
+        out = self._mesh(nid, "SET", **args)
+        if not out["reply"].startswith("TIMEOUT"):
+            self.swarm.nodes[nid].tuning.update(args)
+        return out
 
     def _t_broadcast_alert(self, level: int, message: str) -> dict:
         level = max(1, min(3, int(level)))
-        qid = self.swarm.broadcast("ALERT", lvl=level)
+        before = self.swarm.airtime_used_ms()
+        qid, _ = self.swarm.broadcast("ALERT", lvl=level)
         self.alerts.append({"level": level, "message": message})
-        return {"sent": f"C|*|q{qid}|ALERT|lvl{level}", "nodes": len(self.swarm.nodes)}
+        return {"sent": f"C|*|q{qid}|ALERT|lvl{level}", "nodes": len(self.swarm.nodes),
+                "airtime_ms": round(self.swarm.airtime_used_ms() - before)}
 
     def _t_submit_assessment(self, **a: Any) -> dict:
         if a.get("verdict") not in VERDICTS:

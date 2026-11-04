@@ -23,6 +23,7 @@ constexpr int WARMUP_FRAMES = 10;     // auto-exposure settles over the first fr
 
 float contrastBaseline = -1.0f;
 float prevMean = -1.0f;
+float lastStddev = -1.0f;
 int warmup = 0;
 uint32_t hazeSinceMs = 0;             // 0 = haze currently below the SMK threshold
 
@@ -93,6 +94,7 @@ Reading sample() {
 
   float mean = sum / n;
   float stddev = sqrtf(fmaxf(0.0f, sumSq / n - mean * mean));
+  lastStddev = stddev;
 
   if (warmup < WARMUP_FRAMES) {  // track the scene but report nothing until exposure settles
     warmup++;
@@ -120,6 +122,11 @@ Reading sample() {
 
   out.ok = true;
   return out;
+}
+
+void rebase() {
+  if (lastStddev >= 0) contrastBaseline = lastStddev;
+  hazeSinceMs = 0;
 }
 
 }  // namespace cam

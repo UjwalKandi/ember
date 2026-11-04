@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -97,6 +98,12 @@ class VirtualNode:
         self.alive = True
         self.stuck_haze: Optional[int] = None
         self.glare: Optional[Tuple[float, float, float]] = None   # (period, on_seconds, phase)
+        self.glare_level = rng.uniform(70, 92)
+        # detector parameters the command center can re-program over the mesh (SET smk/flk/rebase)
+        self.smk_thr = 25
+        self.flk = False
+        self.haze_offset = 0
+        self.flame_hist: deque = deque(maxlen=5)
         self.cand, self.cand_n = "OK", 0
         self.code = "OK"
         self.last_conf = 0
@@ -164,8 +171,9 @@ class SimNetwork:
                 conc *= min(1.0, age / 240)
                 smoke = max(smoke, conc)
             smoke = max(smoke, max(0.0, 1 - max(0.0, d - r) / 140))
+        flicker = self.rng.gauss(0, 8) if flame > 0.3 else 0.0     # real flames flicker frame to frame
         rd = Readings(
-            flame=int(_clip(95 * flame + noise(4))),
+            flame=int(_clip(95 * flame + noise(4) + flicker)),
             haze=int(_clip(3 + 90 * smoke + noise(2.5))),
             sound=int(_clip(3 + 70 * sound + noise(2))),
             crackle=int(_clip(100 * sound - 10 + noise(5))),
@@ -177,7 +185,7 @@ class SimNetwork:
             # CONFIRM burst checks flicker across frames, so glare mostly fails it.
             p = 0.15 if burst else 0.9
             if self.rng.random() < p:
-                rd.flame = max(rd.flame, int(self.rng.uniform(70, 92)))
+                rd.flame = max(rd.flame, int(n.glare_level + self.rng.gauss(0, 1.5)))
         if self.fog and t >= self.fog[1]:
             ramp = min(1.0, (t - self.fog[1]) / 120)
             rd.haze = int(_clip(rd.haze + ramp * (self.fog[0] + 4 * math.sin(t / 90 + n.id)) + noise(2)))
@@ -200,14 +208,16 @@ class SimNetwork:
                         rd.flame = max(rd.flame, int(self.rng.uniform(42, 60)))
         if n.stuck_haze is not None:
             rd.haze = n.stuck_haze
+        if n.haze_offset:
+            rd.haze = int(_clip(rd.haze - n.haze_offset))
         return rd
 
     @staticmethod
-    def classify(rd: Readings) -> Tuple[str, int]:
+    def classify(rd: Readings, smk_thr: int = 25) -> Tuple[str, int]:
         """Priority and thresholds shared with the firmware (firmware/src/node.cpp)."""
         if rd.flame >= 40:
             return "FLM", rd.flame
-        if rd.haze >= 25:
+        if rd.haze >= smk_thr:
             return "SMK", rd.haze
         if rd.crackle >= 40:
             return "CRK", rd.crackle
@@ -229,7 +239,11 @@ class SimNetwork:
             rd = self.readings(n, self.t)
             n.max_hz = max(n.max_hz, rd.haze)
             n.max_snd = max(n.max_snd, rd.sound)
-            code, conf = self.classify(rd)
+            n.flame_hist.append(rd.flame)
+            hot = [v for v in n.flame_hist if v >= 40]
+            if n.flk and rd.flame >= 40 and (len(hot) < 3 or max(hot) - min(hot) < 8):
+                rd.flame = 0                 # flicker check on: FLM needs proof of flicker first
+            code, conf = self.classify(rd, n.smk_thr)
             # debounce like the firmware: MOT fires at once, detections need 2 samples, OK needs 3
             if code == n.code:
                 n.cand_n = 0
@@ -282,11 +296,17 @@ class SimNetwork:
                 resp = elp.response(n.id, qid, "PONG", b=round(n.batt, 1))
             elif cmd == "CONFIRM":
                 rd = self.readings(n, self.t, burst=True)
-                code, conf = self.classify(rd)
+                code, conf = self.classify(rd, n.smk_thr)
                 resp = elp.response(n.id, qid, "CONF", [code], c=conf, hz=rd.haze, snd=rd.sound)
             elif cmd == "SET":
                 n.rate = int(pkt.get("rate", n.rate))
                 n.next_hb = min(n.next_hb, self.t + n.rate)
+                n.smk_thr = int(pkt.get("smk", n.smk_thr))
+                n.flk = bool(pkt.get("flk", n.flk))
+                if pkt.get("rebase"):
+                    # treat the current ambient haze (e.g. fog) as the new zero, like cam::rebase()
+                    n.haze_offset = 0
+                    n.haze_offset = max(0, self.readings(n, self.t, burst=True).haze - 3)
                 resp = elp.response(n.id, qid, "ACK")
             else:   # ALERT is fire-and-forget on the firmware too (no reply storm on broadcast)
                 continue

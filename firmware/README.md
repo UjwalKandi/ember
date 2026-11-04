@@ -51,10 +51,26 @@ Optional battery reporting: wire a 2×100 kΩ divider from BAT+ to a free ADC pi
    `TX|C|n1|q1|PING` → `RX|1|0|..|R|n1|q1|PONG`
    `TX|C|n1|q2|CONFIRM` → about 3 s later `R|n1|q2|CONF|OK|c0|hz..|snd..`
    `TX|C|*|q3|ALERT|lvl2` → every node's orange LED double-blinks; `TX|C|*|q4|ALERT|lvl0` clears it.
+   `TX|C|n1|q5|SET|rate10|smk40|flk1` → `R|n1|q5|ACK` (several SET tokens can go in one command).
 4. **Relay test.** Place node A next to the gateway and node B far enough away (another room, or a metal box) that B's packets show up only with `hops` ≥ 1, as in `RX|2|1|..|H|n2|...`. Each B packet should appear exactly **once** at the gateway, which shows dedupe is working.
 5. **Flame test.** Point a node's camera at a lighter or candle 20-50 cm away (or play a fire video full-screen on a phone). Within about 2 s you should see `E|n1|s..|FLM|c..|hz..|snd..`. Remove the flame and an `OK` event follows after about 3 s. Several quick snaps near the mic (crinkling foil, snapping twigs: at least 3 pops within the 200 ms listening window) should trigger `CRK`. A single click should not. Switching a lamp on and off should trigger `MOT`; a waving hand often won't, because MOT measures frame brightness change.
 
-Tuning constants sit at the top of `sense_cam.cpp` (`FLAME_GAIN`, `HAZE_GAIN`, `MOTION_GAIN`, baseline alphas), `sense_mic.cpp` (`TRANSIENT_RATIO`, `TRANSIENT_FLOOR`, the dBFS mapping in `sample()`), and `node.cpp` (`THRESHOLD`, `GLARE_FLICKER`). The thresholds (FLM 40, SMK 25, CRK 40, MOT 40) must stay equal to `SimNetwork.classify` in `gateway/sim.py`, since that is the distribution the model was trained on. Tune the gains, not the thresholds.
+6. **Edge re-programming.** The command center can retune each node's detectors over the mesh with `SET`:
+
+   | token | effect |
+   |---|---|
+   | `rate<N>` | heartbeat interval, 5-600 s |
+   | `smk<N>` | SMK (haze) threshold, default 25; `smk101` mutes the haze channel (faulty sensor) |
+   | `flk1` / `flk0` | FLM also requires flicker across the flame-hot samples in the last 5 (glare-prone node) |
+   | `rebase1` | adopt the current scene as the haze baseline, so ambient fog/dust reads ~0 |
+
+   - **Fog test:** breathe on the lens or hold a diffuser (tracing paper) in front of it until the node sends `SMK`. Keep the diffuser in place and send `TX|C|*|q1|SET|rebase1`. The node ACKs (after a short per-node delay) and returns to `OK` within ~3 s.
+   - **Glare test:** hold a phone flashlight still until `FLM` fires, then send `TX|C|n1|q2|SET|flk1`. FLM should clear and not come back while the light stays still. A flickering lighter still triggers FLM.
+   - **Mute test:** `TX|C|n1|q3|SET|smk101`. The node never sends `SMK` again; `smk25` restores the default.
+
+   Settings live in RAM, so a reboot restores the defaults.
+
+Tuning constants sit at the top of `sense_cam.cpp` (`FLAME_GAIN`, `HAZE_GAIN`, `MOTION_GAIN`, baseline alphas), `sense_mic.cpp` (`TRANSIENT_RATIO`, `TRANSIENT_FLOOR`, the dBFS mapping in `sample()`), and `node.cpp` (`THRESHOLD`, `GLARE_FLICKER`). The default thresholds (FLM 40, SMK 25, CRK 40, MOT 40) must stay equal to `SimNetwork.classify` in `gateway/sim.py`, since that is the distribution the model was trained on. Tune the gains, not the thresholds.
 
 ## Calibration (do before the demo)
 
