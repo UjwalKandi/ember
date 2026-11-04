@@ -42,6 +42,15 @@ pio --version
 ```
 ✅ Both print a version, and modal is newer than 1.2.6. `.venv/` is git-ignored. On macOS, `pip` alone may be "command not found" outside the venv; use `python3 -m pip`.
 - Can't upgrade right now? Fallback: Modal dashboard → **Settings → Image Config** → image builder version `2025.06`.
+- **Still the same error inside `(.venv)`?** Check the traceback paths: if they show `Library/Python/3.9`, an old global modal is shadowing the venv. Fix:
+  ```bash
+  deactivate; python3 -m pip uninstall -y modal
+  sed -i '' '/Library\/Python\/3.9\/bin/d' ~/.zshrc     # drop an old PATH line, if you added one
+  rm -rf .venv && python3.12 -m venv .venv && source .venv/bin/activate
+  python --version                                     # must be 3.12.x
+  python -m pip install modal pyserial platformio
+  ```
+  Then prefer `python -m modal ...` over a bare `modal ...`, so the venv's copy is always used.
 
 - A `NotOpenSSLWarning ... LibreSSL` message is harmless (macOS system Python). To hide it:
   `echo 'export PYTHONWARNINGS="ignore::Warning:urllib3"' >> ~/.zshrc && source ~/.zshrc`
