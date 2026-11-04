@@ -90,4 +90,4 @@ Console commands (every role; one image for every board, settings stored in flas
 | `TEST` | hardware self-test; ends with `LOG|selftest PASS` or `LOG|selftest FAIL: <parts>` |
 | `REBOOT` | restarts the board |
 | `CAM?` | camera diagnostics: colour stats and flame pixels for both RGB565 byte orders |
-| `CAM|swap=<0/1>` / `CAM|gain=<5-200>` | camera byte order / flame sensitivity, saved in flash |
+| `CAM|swap=<0/1>` / `CAM|gain=<5-200>` / `CAM|flick=<0-100>` | camera byte order / flame sensitivity / minimum flicker % (steady lights like lamps are not flame), saved in flash |

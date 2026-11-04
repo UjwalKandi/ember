@@ -13,6 +13,7 @@ Role curRole = NODE;
 uint8_t curId = 0;
 bool curSwap = true;
 float curGain = 30.0f;
+uint8_t curFlick = 15;
 
 }  // namespace
 
@@ -22,6 +23,7 @@ void begin() {
   curId = prefs.getUChar("id", NODE_ID);
   curSwap = prefs.getBool("cswap", true);   // measured: XIAO frames need the byte swap
   curGain = prefs.getFloat("fgain", 30.0f);
+  curFlick = prefs.getUChar("flick", 15);
   prefs.end();
 }
 
@@ -30,15 +32,18 @@ uint8_t nodeId() { return curId; }
 const char *roleName() { return curRole == GATEWAY ? "gateway" : "node"; }
 bool camSwap() { return curSwap; }
 float flameGain() { return curGain; }
+uint8_t flickPct() { return curFlick; }
 
-void setCam(bool swap, float gain) {
+void setCam(bool swap, float gain, uint8_t flick) {
   prefs.begin("ember", false);
   prefs.putBool("cswap", swap);
   prefs.putFloat("fgain", gain);
+  prefs.putUChar("flick", flick);
   prefs.end();
   curSwap = swap;
   curGain = gain;
-  cam::configure(swap, gain);
+  curFlick = flick;
+  cam::configure(swap, gain, flick);
 }
 
 void setRole(Role r) {
@@ -65,8 +70,8 @@ char line[256];
 size_t lineLen = 0;
 
 void printConfig() {
-  Serial.printf("LOG|cfg role=%s id=%u fw=%s cam_swap=%d flame_gain=%.0f\n", settings::roleName(),
-                settings::nodeId(), EMBER_FW, settings::camSwap(), settings::flameGain());
+  Serial.printf("LOG|cfg role=%s id=%u fw=%s cam_swap=%d flame_gain=%.0f flick=%u\n", settings::roleName(),
+                settings::nodeId(), EMBER_FW, settings::camSwap(), settings::flameGain(), settings::flickPct());
 }
 
 void reboot() {
@@ -98,7 +103,7 @@ bool handleCommon(const char *l) {
   } else if (strcmp(l, "CAM?") == 0) {
     cam::diag();
   } else if (strncmp(l, "CAM|swap=", 9) == 0) {
-    settings::setCam(atoi(l + 9) == 1, settings::flameGain());
+    settings::setCam(atoi(l + 9) == 1, settings::flameGain(), settings::flickPct());
     printConfig();
   } else if (strncmp(l, "CAM|gain=", 9) == 0) {
     float g = atof(l + 9);
@@ -106,7 +111,15 @@ bool handleCommon(const char *l) {
       Serial.println("LOG|cam error: gain must be 5-200");
       return true;
     }
-    settings::setCam(settings::camSwap(), g);
+    settings::setCam(settings::camSwap(), g, settings::flickPct());
+    printConfig();
+  } else if (strncmp(l, "CAM|flick=", 10) == 0) {
+    int f = atoi(l + 10);
+    if (f < 0 || f > 100) {
+      Serial.println("LOG|cam error: flick must be 0-100 (0 = off)");
+      return true;
+    }
+    settings::setCam(settings::camSwap(), settings::flameGain(), f);
     printConfig();
   } else if (strcmp(l, "TEST") == 0) {
     if (testFn) testFn();
