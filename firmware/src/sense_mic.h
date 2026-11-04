@@ -6,7 +6,7 @@ namespace mic {
 struct Reading {
   bool ok;
   uint8_t level;    // 0-100, RMS mapped from -60..-10 dBFS
-  uint8_t crackle;  // 0-100, short transients per second (x10)
+  uint8_t crackle;  // 0-100, transients in the window (3 -> 40, +15 each)
 };
 
 bool begin();

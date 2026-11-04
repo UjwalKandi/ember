@@ -56,8 +56,9 @@ Reading sample(uint32_t windowMs) {
   float rms = sqrtf(sumSq / n);
   float dbfs = 20.0f * log10f(fmaxf(rms, 1.0f) / 32768.0f);
   out.level = clamp100((dbfs + 60.0f) * 2.0f);
-  float perSecond = transients * 1000.0f / fmaxf(windowMs, 1);
-  out.crackle = clamp100(perSecond * 10.0f);
+  // Fire crackle is a burst of pops: one or two clicks (a twig, a door) stay below the
+  // CRK threshold of 40; 3 transients in the window reach it, each extra adds 15.
+  out.crackle = transients >= 3 ? clamp100(40.0f + (transients - 3) * 15.0f) : (uint8_t)(transients * 12);
   out.ok = true;
   return out;
 }

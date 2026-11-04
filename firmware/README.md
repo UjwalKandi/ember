@@ -15,7 +15,7 @@ Transport is ESP-NOW broadcast on channel 1 with Meshtastic-style managed floodi
 | `src/mesh.{h,cpp}` | ESP-NOW flood mesh (frame header, TTL/hops, dedupe, jittered relays, RSSI) |
 | `src/sense_cam.{h,cpp}` | QQVGA RGB565 frames → flame ratio, haze (contrast loss vs slow baseline), motion |
 | `src/sense_mic.{h,cpp}` | 16 kHz PDM mic → sound level and crackle transient rate |
-| `src/node.cpp` | 1 Hz detection state machine with hysteresis, heartbeats, PING/CONFIRM/SET/ALERT |
+| `src/node.cpp` | 1 Hz detection state machine (simulator-matched thresholds, debounce), heartbeats, PING/CONFIRM/SET/ALERT |
 | `src/gateway.cpp` | mesh ↔ USB serial bridge |
 | `src/config.h` | node id default, channel, TTL, LED pin, optional battery ADC |
 
@@ -37,24 +37,35 @@ PLATFORMIO_BUILD_FLAGS=-DNODE_ID=3 pio run -e node -t upload
 
 If the upload port isn't found, hold **BOOT**, tap **RESET**, release BOOT, and retry. Add `--upload-port /dev/cu.usbmodemXXXX` when several boards are connected.
 
-Node ids must match `gateway/nodes.json` so the command center knows where each node sits.
+Node ids must match `config/nodes.json` so the command center knows where each node sits.
 
-Optional battery reporting: wire a 2×100 kΩ divider from BAT+ to a free ADC pin and add `-DBATT_ADC_PIN=A0` to the build flags. Without it, nodes report `b0.0`.
+Optional battery reporting: wire a 2×100 kΩ divider from BAT+ to a free ADC pin and add `-DBATT_ADC_PIN=A0` to the build flags. Without it, nodes leave the `b` token out of heartbeats and PONGs.
 
 ## Test procedure
 
 1. **Gateway boot.** `pio device monitor -e gateway` should print
    `LOG|EMBER gateway v1 mac=.. ch=1 mesh=ok`.
 2. **Heartbeats.** Power a node (USB power bank is fine). Within a few seconds the gateway prints
-   `RX|1|0|-48|H|n1|s1|b0.0|up2|hz0|snd12`. A node's own monitor shows `EMBER node n1 mesh=1 cam=1 mic=1`, followed by its `TX ...` lines.
+   `RX|1|0|-48|H|n1|s1|up2|hz0|snd12`. A node's own monitor shows `EMBER node n1 mesh=1 cam=1 mic=1`, followed by its `TX ...` lines.
 3. **Commands.** Type into the gateway monitor:
-   `TX|C|n1|q1|PING` → `RX|1|0|..|R|n1|q1|PONG|b0.0`
-   `TX|C|n1|q2|CONFIRM` → about 3 s later `R|n1|q2|CONF|OK|c..|hz..|snd..`
+   `TX|C|n1|q1|PING` → `RX|1|0|..|R|n1|q1|PONG`
+   `TX|C|n1|q2|CONFIRM` → about 3 s later `R|n1|q2|CONF|OK|c0|hz..|snd..`
    `TX|C|*|q3|ALERT|lvl2` → every node's orange LED double-blinks; `TX|C|*|q4|ALERT|lvl0` clears it.
 4. **Relay test.** Place node A next to the gateway and node B far enough away (another room, or a metal box) that B's packets show up only with `hops` ≥ 1, as in `RX|2|1|..|H|n2|...`. Each B packet should appear exactly **once** at the gateway, which shows dedupe is working.
-5. **Flame test.** Point a node's camera at a lighter or candle 20-50 cm away (or play a fire video full-screen on a phone). Within about 2 s you should see `E|n1|s..|FLM|c..|hz..|snd..`. Remove the flame and an `OK` event follows after about 3 s. Crinkling foil or snapping twigs near the mic should trigger `CRK`. Waving a hand or switching a lamp should trigger `MOT`.
+5. **Flame test.** Point a node's camera at a lighter or candle 20-50 cm away (or play a fire video full-screen on a phone). Within about 2 s you should see `E|n1|s..|FLM|c..|hz..|snd..`. Remove the flame and an `OK` event follows after about 3 s. Several quick snaps near the mic (crinkling foil, snapping twigs: at least 3 pops within the 200 ms listening window) should trigger `CRK`. A single click should not. Switching a lamp on and off should trigger `MOT`; a waving hand often won't, because MOT measures frame brightness change.
 
-Tuning constants sit at the top of `sense_cam.cpp` (`FLAME_GAIN`, `HAZE_GAIN`, `MOTION_GAIN`), `sense_mic.cpp` (`TRANSIENT_RATIO`, `TRANSIENT_FLOOR`), and `node.cpp` (`ENTER` thresholds, `HYSTERESIS`).
+Tuning constants sit at the top of `sense_cam.cpp` (`FLAME_GAIN`, `HAZE_GAIN`, `MOTION_GAIN`, baseline alphas), `sense_mic.cpp` (`TRANSIENT_RATIO`, `TRANSIENT_FLOOR`, the dBFS mapping in `sample()`), and `node.cpp` (`THRESHOLD`, `GLARE_FLICKER`). The thresholds (FLM 40, SMK 25, CRK 40, MOT 40) must stay equal to `SimNetwork.classify` in `gateway/sim.py`, since that is the distribution the model was trained on. Tune the gains, not the thresholds.
+
+## Calibration (do before the demo)
+
+The fine-tuned model learned what "normal" looks like from the simulator: quiet-scene heartbeats carry **hz ≈ 3-10** and **snd ≈ 3-10**. Real nodes need to report in the same range.
+
+1. **Baseline.** Put the nodes where they'll sit for the demo, keep the room quiet and the lighting steady, and watch about 2 minutes of heartbeats: `pio device monitor -e gateway`. Ignore the first ~10 s, while the camera warms up and its exposure settles.
+2. **Haze off?** If `hz` stays above ~10 with nothing in view, lower `HAZE_GAIN` in `sense_cam.cpp`. If it never moves when you breathe on the lens or hold paper in front of it, raise it.
+3. **Sound off?** `snd = (dBFS + 60) * 2`. If a quiet room reads above ~10, change the `+ 60.0f` offset in `sense_mic.cpp` to something smaller (e.g. `+ 50.0f`). If talking at 1 m doesn't reach ~30-50, make it larger.
+4. **Flame.** Hold a lighter 20-50 cm from the camera: expect `E|n..|FLM|c40+`, and a `CONFIRM` sent from the gateway monitor should come back `CONF|FLM`. If `c` stays low, raise `FLAME_GAIN`. If it never fires at all, swap the RGB565 byte order in `cam::sample()`.
+5. **Glare.** Hold a phone flashlight (or a red LED) perfectly still in front of the camera. It may raise `FLM`, but `CONFIRM` should answer `CONF|OK` (or another non-flame code), because the burst sees no flicker. If it still answers FLM, raise `GLARE_FLICKER` in `node.cpp`.
+6. Re-flash and repeat until a quiet scene sits in the 3-10 band and both checks behave.
 
 ## Moving to real Meshtastic / LoRa
 

@@ -60,6 +60,20 @@ class SwarmTests(unittest.TestCase):
         ep = make_episode("wildfire", 2)
         self.assertLess(len(ep.swarm.context()), 4000)
 
+    def test_context_lists_only_node_events(self):
+        ep = make_episode("wildfire", 3)
+        policy.HeuristicAgent(ep.swarm, ep.tools).run()       # leaves CONF/ACK replies in the log
+        self.assertFalse([l for l in ep.swarm.context().splitlines() if " R|" in l])
+
+    def test_missing_battery_is_not_unreliable(self):
+        ep = make_episode("quiet", 0)
+        for nid in ep.swarm.nodes:
+            ep.swarm.nodes[nid].batt = None
+        ep.swarm.on_rx(elp.RxLine(1, 0, -50, elp.parse("H|n1|s99|b0|up10|hz4|snd4")))
+        self.assertIsNone(ep.swarm.nodes[1].batt)
+        a = policy.heuristic_assessment(ep.swarm, {})
+        self.assertEqual(a["unreliable_nodes"], [])
+
     def test_request_response(self):
         ep = make_episode("quiet", 0)
         r = ep.swarm.request(1, "PING", timeout=0)
@@ -89,6 +103,19 @@ class TrainingDataTests(unittest.TestCase):
         self.assertEqual(len(submits), 1)
         self.assertIsInstance(submits[0]["function"]["arguments"], dict)   # template needs dicts
         self.assertEqual(row["tools"], TOOL_SCHEMAS)
+
+    def test_one_tool_call_per_message(self):
+        row = trajectory(make_episode("wildfire_plus_glare", 2), random.Random(0))
+        msgs = row["messages"]
+        for i, m in enumerate(msgs):
+            if m.get("tool_calls"):
+                self.assertEqual(len(m["tool_calls"]), 1)
+                self.assertEqual(msgs[i + 1]["role"], "tool")      # result follows its call
+                self.assertEqual(msgs[i + 1]["tool_call_id"], m["tool_calls"][0]["id"])
+
+    def test_holdout_scenarios_not_in_training(self):
+        from training.gen_data import HOLDOUT
+        self.assertTrue(set(HOLDOUT) <= set(sim.SCENARIOS))
 
 
 class ReplayClient:

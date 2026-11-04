@@ -204,7 +204,7 @@ class SimNetwork:
 
     @staticmethod
     def classify(rd: Readings) -> Tuple[str, int]:
-        """Same priority/thresholds as the firmware event state machine."""
+        """Priority and thresholds shared with the firmware (firmware/src/node.cpp)."""
         if rd.flame >= 40:
             return "FLM", rd.flame
         if rd.haze >= 25:
@@ -217,7 +217,7 @@ class SimNetwork:
 
     # --- stepping --------------------------------------------------------
 
-    def step(self, dt: float = 2.0) -> None:
+    def step(self, dt: float = 1.0) -> None:   # firmware samples at 1 Hz
         self.t += dt
         for n in self.nodes.values():
             if not n.alive:
@@ -248,7 +248,7 @@ class SimNetwork:
                 self._emit(n, elp.heartbeat(n.id, n.next_seq(), n.batt, up, n.max_hz, n.max_snd))
                 n.max_hz = n.max_snd = 0
 
-    def run(self, seconds: float, dt: float = 2.0) -> None:
+    def run(self, seconds: float, dt: float = 1.0) -> None:
         end = self.t + seconds
         while self.t < end:
             self.step(dt)
@@ -288,9 +288,7 @@ class SimNetwork:
                 n.rate = int(pkt.get("rate", n.rate))
                 n.next_hb = min(n.next_hb, self.t + n.rate)
                 resp = elp.response(n.id, qid, "ACK")
-            elif cmd == "ALERT":
-                resp = elp.response(n.id, qid, "ACK")
-            else:
+            else:   # ALERT is fire-and-forget on the firmware too (no reply storm on broadcast)
                 continue
             if self.on_rx:   # responses are retried by the firmware, so no loss here
                 self.on_rx(elp.RxLine(n.id, n.hops, n.rssi, resp), self.t)

@@ -12,12 +12,13 @@
 namespace node {
 namespace {
 
-// Event codes in priority order, with enter thresholds; exit = enter - HYSTERESIS.
+// Event codes in priority order with one threshold each (no hysteresis). These match
+// gateway/sim.py SimNetwork.classify, the distribution Muse Glimmer was trained on.
 enum Code { OK = 0, FLM, SMK, CRK, MOT };
 const char *CODE_NAMES[] = {"OK", "FLM", "SMK", "CRK", "MOT"};
-const uint8_t ENTER[] = {0, 35, 40, 40, 50};
-constexpr uint8_t HYSTERESIS = 15;
+const uint8_t THRESHOLD[] = {0, 40, 25, 40, 40};
 constexpr uint8_t REPORT_DELTA = 15;     // re-send same code if confidence moves this much
+constexpr uint8_t GLARE_FLICKER = 8;     // flame burst spread below this = static glare
 constexpr uint32_t SAMPLE_MS = 1000;
 constexpr uint32_t MIC_WINDOW_MS = 200;
 
@@ -28,6 +29,7 @@ struct Scores {
 
 struct PendingCmd {
   bool used;
+  uint32_t dueMs;  // broadcast commands reply after a per-node delay
   int qid;
   char cmd[12];
   int rate;
@@ -48,11 +50,12 @@ uint8_t pendingCount = 0;
 PendingCmd cmdQueue[4];
 int alertLevel = 0;
 
-float battery() {
+// "|b3.9", or "" when no divider is fitted (a fake 0.0 V would read as a dying node).
+void battToken(char *out, size_t n) {
 #ifdef BATT_ADC_PIN
-  return analogReadMilliVolts(BATT_ADC_PIN) * 2 / 1000.0f;
+  snprintf(out, n, "|b%.1f", analogReadMilliVolts(BATT_ADC_PIN) * 2 / 1000.0f);
 #else
-  return 0.0f;  // no divider fitted
+  if (n) out[0] = '\0';
 #endif
 }
 
@@ -76,23 +79,15 @@ Scores measure(uint32_t micWindowMs) {
   return sc;
 }
 
-Code classify(const Scores &sc, Code current) {
+Code classify(const Scores &sc) {
   for (int k = FLM; k <= MOT; k++) {
-    if (sc.s[k] >= ENTER[k]) return (Code)k;
-    // Stay in the current state until it drops below its exit threshold.
-    if (k == current && sc.s[k] + HYSTERESIS >= ENTER[k]) return (Code)k;
+    if (sc.s[k] >= THRESHOLD[k]) return (Code)k;
   }
   return OK;
 }
 
-uint8_t okConfidence(const Scores &sc) {
-  uint8_t worst = 0;
-  for (int k = FLM; k <= MOT; k++) worst = max(worst, sc.s[k]);
-  return 100 - worst;
-}
-
 void sendEvent(Code code, const Scores &sc) {
-  uint8_t conf = code == OK ? okConfidence(sc) : sc.s[code];
+  uint8_t conf = code == OK ? 0 : sc.s[code];
   char body[EMBER_MAX_BODY + 1];
   snprintf(body, sizeof(body), "E|n%d|s%lu|%s|c%d|hz%d|snd%d", NODE_ID, (unsigned long)++seq,
            CODE_NAMES[code], conf, sc.haze, sc.snd);
@@ -101,9 +96,10 @@ void sendEvent(Code code, const Scores &sc) {
 }
 
 void sendHeartbeat() {
-  char body[EMBER_MAX_BODY + 1];
-  snprintf(body, sizeof(body), "H|n%d|s%lu|b%.1f|up%lu|hz%d|snd%d", NODE_ID,
-           (unsigned long)++seq, battery(), (unsigned long)(millis() / 1000), maxHaze, maxSnd);
+  char body[EMBER_MAX_BODY + 1], batt[12];
+  battToken(batt, sizeof(batt));
+  snprintf(body, sizeof(body), "H|n%d|s%lu%s|up%lu|hz%d|snd%d", NODE_ID,
+           (unsigned long)++seq, batt, (unsigned long)(millis() / 1000), maxHaze, maxSnd);
   send(body);
   maxHaze = maxSnd = 0;
 }
@@ -113,7 +109,7 @@ void tick() {
   maxHaze = max(maxHaze, sc.haze);
   maxSnd = max(maxSnd, sc.snd);
 
-  Code cand = classify(sc, active);
+  Code cand = classify(sc);
   if (cand == active) {
     pendingCount = 0;
     if (active != OK && abs((int)sc.s[active] - (int)lastSentConf) > REPORT_DELTA) {
@@ -140,14 +136,16 @@ void onFrame(const mesh::Frame &f) {
   strncpy(buf, f.body, sizeof(buf));
   buf[sizeof(buf) - 1] = '\0';
 
-  PendingCmd cmd = {true, -1, "", -1, -1};
+  PendingCmd cmd = {true, millis(), -1, "", -1, -1};
   char *save = nullptr;
   int idx = 0;
   for (char *tok = strtok_r(buf, "|", &save); tok; tok = strtok_r(nullptr, "|", &save), idx++) {
     if (idx == 0) continue;  // "C"
     if (idx == 1) {
-      bool forUs = strcmp(tok, "*") == 0 || (tok[0] == 'n' && atoi(tok + 1) == NODE_ID);
-      if (!forUs) return;
+      bool all = strcmp(tok, "*") == 0;
+      if (!all && !(tok[0] == 'n' && atoi(tok + 1) == NODE_ID)) return;
+      // Stagger replies to broadcasts so every node doesn't answer at once.
+      if (all) cmd.dueMs += random(0, 50 * NODE_ID);
       continue;
     }
     if (tok[0] == 'q' && isdigit(tok[1])) cmd.qid = atoi(tok + 1);
@@ -166,27 +164,39 @@ void onFrame(const mesh::Frame &f) {
 }
 
 void confirm(int qid) {
-  // ~3 s burst: keep the strongest reading of each detector.
-  Scores best = {};
-  for (int i = 0; i < 6; i++) {
+  // ~3 s burst of 6 samples, averaged so one noisy frame can't decide the answer.
+  constexpr int N = 6;
+  uint32_t sum[5] = {}, hazeSum = 0, sndSum = 0;
+  uint8_t flameMin = 255, flameMax = 0;
+  for (int i = 0; i < N; i++) {
     Scores sc = measure(400);
-    for (int k = FLM; k <= MOT; k++) best.s[k] = max(best.s[k], sc.s[k]);
-    best.haze = max(best.haze, sc.haze);
-    best.snd = max(best.snd, sc.snd);
+    for (int k = FLM; k <= MOT; k++) sum[k] += sc.s[k];
+    flameMin = min(flameMin, sc.s[FLM]);
+    flameMax = max(flameMax, sc.s[FLM]);
+    hazeSum += sc.haze;
+    sndSum += sc.snd;
     delay(50);
   }
-  Code code = classify(best, OK);
-  uint8_t conf = code == OK ? okConfidence(best) : best.s[code];
+  Scores avg = {};
+  for (int k = FLM; k <= MOT; k++) avg.s[k] = sum[k] / N;
+  avg.haze = hazeSum / N;
+  avg.snd = sndSum / N;
+  // Real flames flicker; a static flame-coloured blob (sun glare, a lamp) does not.
+  if (avg.s[FLM] >= THRESHOLD[FLM] && flameMax - flameMin < GLARE_FLICKER) avg.s[FLM] = 0;
+  Code code = classify(avg);
+  uint8_t conf = code == OK ? 0 : avg.s[code];
   char body[EMBER_MAX_BODY + 1];
   snprintf(body, sizeof(body), "R|n%d|q%d|CONF|%s|c%d|hz%d|snd%d", NODE_ID, qid,
-           CODE_NAMES[code], conf, best.haze, best.snd);
+           CODE_NAMES[code], conf, avg.haze, avg.snd);
   send(body);
 }
 
 void runCommand(const PendingCmd &cmd) {
   char body[EMBER_MAX_BODY + 1];
   if (strcmp(cmd.cmd, "PING") == 0) {
-    snprintf(body, sizeof(body), "R|n%d|q%d|PONG|b%.1f", NODE_ID, cmd.qid, battery());
+    char batt[12];
+    battToken(batt, sizeof(batt));
+    snprintf(body, sizeof(body), "R|n%d|q%d|PONG%s", NODE_ID, cmd.qid, batt);
     send(body);
   } else if (strcmp(cmd.cmd, "CONFIRM") == 0) {
     confirm(cmd.qid);
@@ -230,7 +240,7 @@ void loop() {
   mesh::loop();
 
   for (auto &slot : cmdQueue) {
-    if (slot.used) {
+    if (slot.used && (int32_t)(now - slot.dueMs) >= 0) {
       PendingCmd cmd = slot;
       slot.used = false;
       runCommand(cmd);

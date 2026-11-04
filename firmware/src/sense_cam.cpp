@@ -14,10 +14,17 @@ constexpr int PIN_Y9 = 48, PIN_Y8 = 11, PIN_Y7 = 12, PIN_Y6 = 14, PIN_Y5 = 16, P
 constexpr float FLAME_GAIN = 15.0f;
 constexpr float HAZE_GAIN = 2.0f;      // 50% contrast loss -> 100
 constexpr float MOTION_GAIN = 2.0f;    // 50-level mean jump -> 100
-constexpr float BASELINE_ALPHA = 0.01f;
+// Contrast baseline adapts slowly always, and faster if haze has been pinned for a long
+// time (a scene change like dusk, not smoke), so it can never latch.
+constexpr float BASELINE_ALPHA = 0.002f;
+constexpr float BASELINE_ALPHA_FAST = 0.02f;
+constexpr uint32_t STUCK_HAZE_MS = 120000;
+constexpr int WARMUP_FRAMES = 10;     // auto-exposure settles over the first frames
 
 float contrastBaseline = -1.0f;
 float prevMean = -1.0f;
+int warmup = 0;
+uint32_t hazeSinceMs = 0;             // 0 = haze currently below the SMK threshold
 
 inline bool isFlame(uint8_t r, uint8_t g, uint8_t b) {
   // Bright, red-dominant, warm ordering (R > G > B) with strong red-blue spread.
@@ -52,7 +59,7 @@ bool begin() {
   c.pixel_format = PIXFORMAT_RGB565;
   c.frame_size = FRAMESIZE_QQVGA;  // 160x120 is plenty for colour statistics
   c.jpeg_quality = 12;
-  c.fb_count = 1;
+  c.fb_count = 2;  // with GRAB_LATEST, two buffers mean each sample is a fresh frame
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;
   return esp_camera_init(&c) == ESP_OK;
@@ -87,13 +94,26 @@ Reading sample() {
   float mean = sum / n;
   float stddev = sqrtf(fmaxf(0.0f, sumSq / n - mean * mean));
 
+  if (warmup < WARMUP_FRAMES) {  // track the scene but report nothing until exposure settles
+    warmup++;
+    contrastBaseline = stddev;
+    prevMean = mean;
+    out.ok = true;
+    return out;
+  }
+
   out.flame = clamp100(100.0f * flamePx / n * FLAME_GAIN);
 
-  if (contrastBaseline < 0) contrastBaseline = stddev;
   float loss = contrastBaseline > 1.0f ? (contrastBaseline - stddev) / contrastBaseline : 0;
   out.haze = clamp100(loss * 100.0f * HAZE_GAIN);
-  // Don't let the baseline drift into smoke: only adapt while the scene looks clear.
-  if (out.haze < 40) contrastBaseline += BASELINE_ALPHA * (stddev - contrastBaseline);
+  uint32_t now = millis();
+  if (out.haze >= 25) {
+    if (hazeSinceMs == 0) hazeSinceMs = now ? now : 1;
+  } else {
+    hazeSinceMs = 0;
+  }
+  bool stuck = hazeSinceMs != 0 && now - hazeSinceMs > STUCK_HAZE_MS;
+  contrastBaseline += (stuck ? BASELINE_ALPHA_FAST : BASELINE_ALPHA) * (stddev - contrastBaseline);
 
   if (prevMean >= 0) out.motion = clamp100(fabsf(mean - prevMean) * MOTION_GAIN);
   prevMean = mean;

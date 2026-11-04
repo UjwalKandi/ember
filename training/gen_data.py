@@ -29,6 +29,8 @@ from gateway.prompts import SYSTEM_PROMPT, user_prompt  # noqa: E402
 from gateway.tools import TOOL_SCHEMAS  # noqa: E402
 
 EVAL_SEED_OFFSET = 100_000
+# Compositions never shown in training; eval reports them separately to measure generalization.
+HOLDOUT = ("wildfire_plus_stuck", "wildfire_in_fog")
 
 
 def teacher_assessment(ep: Episode, res: Dict[str, Dict[int, str]], rng: random.Random) -> Dict[str, Any]:
@@ -63,25 +65,24 @@ def _calls(calls: List[policy.Call]) -> List[dict]:
              "function": {"name": n, "arguments": a}} for n, a in calls]
 
 
+def _step(msgs: List[dict], ep: Episode, name: str, args: Dict[str, Any]) -> str:
+    """One assistant message with exactly one tool call, then its result (Muse Glimmer's format)."""
+    (c,) = _calls([(name, args)])
+    msgs.append({"role": "assistant", "content": "", "tool_calls": [c]})
+    result = ep.tools.call(name, args)
+    msgs.append({"role": "tool", "tool_call_id": c["id"], "name": name, "content": result})
+    return result
+
+
 def trajectory(ep: Episode, rng: random.Random) -> Dict[str, Any]:
     msgs: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt(ep.swarm.context())}]
     inv = policy.investigate(ep.swarm)
-    results: List[str] = []
-    if inv:
-        tc = _calls(inv)
-        msgs.append({"role": "assistant", "content": "", "tool_calls": tc})
-        for c, (n, a) in zip(tc, inv):
-            r = ep.tools.call(n, a)
-            results.append(r)
-            msgs.append({"role": "tool", "tool_call_id": c["id"], "name": n, "content": r})
+    results = [_step(msgs, ep, n, a) for n, a in inv]
     res = policy.parse_results(inv, results)
     a = teacher_assessment(ep, res, rng)
-    act = policy.actions_for(a) + [("submit_assessment", a)]
-    tc = _calls(act)
-    msgs.append({"role": "assistant", "content": "", "tool_calls": tc})
-    for c, (n, args) in zip(tc, act):
-        msgs.append({"role": "tool", "tool_call_id": c["id"], "name": n, "content": ep.tools.call(n, args)})
+    for n, args in policy.actions_for(a) + [("submit_assessment", a)]:
+        _step(msgs, ep, n, args)
     msgs.append({"role": "assistant", "content": policy.sitrep(ep.swarm, a, res, rng)})
     return {"messages": msgs, "tools": TOOL_SCHEMAS,
             "meta": {"scenario": ep.scenario, "seed": ep.seed, "verdict": a["verdict"], "cause": a["cause"]}}
@@ -98,7 +99,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(1234)
     rows, stats = [], Counter()
-    for sc in sim.SCENARIOS:
+    for sc in [s for s in sim.SCENARIOS if s not in HOLDOUT]:
         for seed in range(args.per_scenario):
             row = trajectory(make_episode(sc, seed), rng)
             rows.append(row)
@@ -113,6 +114,8 @@ def main() -> None:
         for sc in sim.SCENARIOS:
             for i in range(args.eval_per_scenario):
                 f.write(json.dumps({"scenario": sc, "seed": EVAL_SEED_OFFSET + i}) + "\n")
+    json.dump({"holdout": list(HOLDOUT), "train_scenarios": [s for s in sim.SCENARIOS if s not in HOLDOUT]},
+              open(out / "manifest.json", "w"), indent=1)
     chars = sorted(sum(len(m.get("content") or json.dumps(m.get("tool_calls"))) for m in r["messages"]) for r in rows)
     print(f"train={len(rows) - n_val} val={n_val} eval={len(sim.SCENARIOS) * args.eval_per_scenario}")
     print(f"chars/example p50={chars[len(chars) // 2]} p95={chars[int(len(chars) * .95)]} max={chars[-1]}")

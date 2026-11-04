@@ -15,4 +15,4 @@
 
 // Optional battery sense: XIAO ESP32S3 has no on-board divider, so wire a 2x100k
 // divider from BAT+ to a free ADC pin and define BATT_ADC_PIN (e.g. -DBATT_ADC_PIN=A0).
-// Without it, nodes report b0.0.
+// Without it, nodes omit the b token from H and PONG packets.

@@ -12,9 +12,9 @@ from .tools import TOOL_SCHEMAS, Toolbox
 
 
 class GlimmerAgent:
-    # The muse_glimmer vLLM parser can return parallel calls one per response, so allow extra turns.
+    # Muse Glimmer emits one tool call per message, so a full assessment takes ~5-12 turns.
     def __init__(self, swarm: Swarm, toolbox: Toolbox, client: Optional[ChatClient] = None,
-                 max_turns: int = 10):
+                 max_turns: int = 16):
         self.swarm, self.tools = swarm, toolbox
         self.client = client or ChatClient()
         self.max_turns = max_turns
@@ -25,13 +25,18 @@ class GlimmerAgent:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt(self.swarm.context())},
         ]
-        report, n_calls, t0 = "", 0, time.time()
+        report, n_calls, t0, nudged = "", 0, time.time(), False
         for turn in range(self.max_turns):
             out = self.client.chat(messages, tools=TOOL_SCHEMAS)
             if out.get("reasoning"):
                 emit({"kind": "thought", "text": out["reasoning"]})
             calls = out["tool_calls"]
             if not calls:
+                if self.tools.assessment is None and not nudged:
+                    nudged = True   # answered without submitting: ask once for the structured call
+                    messages.append({"role": "assistant", "content": out["content"] or ""})
+                    messages.append({"role": "user", "content": "Call submit_assessment now, then write the SITREP."})
+                    continue
                 report = out["content"]
                 break
             messages.append({"role": "assistant", "content": out["content"] or "", "tool_calls": calls})

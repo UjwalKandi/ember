@@ -29,20 +29,23 @@ Wildfires start where there is no cell coverage and no one watching. EMBER puts 
 |---|---|---|
 | simulate | 14 scenarios (wildfire variants, campfire, sun glare, vehicle, dusty road, fog, fire-in-fog, stuck sensor, dying node, …) on random node grids with wind, packet loss and multi-hop | `gateway/sim.py` |
 | label | ground truth from the simulator; tool-use skeleton from an observation-only policy | `training/gen_data.py` |
-| format | OpenAI `messages` with tool calls (arguments as dicts) + tool schemas, ~2.7k trajectories | `data/*.jsonl` |
-| train | Axolotl QLoRA on 1×H100 (Modal), cookbook config + EMBER overrides | `training/modal_app.py` |
+| format | OpenAI `messages`, one tool call per assistant message (Muse Glimmer's format), arguments as dicts, + tool schemas; ~2.4k trajectories | `data/*.jsonl` |
+| train | Axolotl QLoRA on 1×H100 (Modal): cookbook hyperparameters on Axolotl's text-only tool-calling path, 8k context | `training/modal_app.py` |
 | serve | merged checkpoint on the `vllm/vllm-openai:muse-glimmer` image, `muse_glimmer` tool + reasoning parsers | `training/modal_app.py` |
 | evaluate | 420 held-out episodes: verdict/cause accuracy, false alarms, misses, localization, node-health F1 | `training/eval.py` |
 
 ### Results (held-out, 420 episodes)
 
+`wildfire_plus_stuck` and `wildfire_in_fog` are **never seen in training**. They test whether the model generalizes to new combinations of situations it did see.
+
 | metric | rule-based baseline | Muse Glimmer (base) | **EMBER (fine-tuned)** |
 |---|---|---|---|
-| verdict accuracy | 0.924 | _pending_ | _pending_ |
-| cause accuracy | 0.874 | | |
+| verdict accuracy | 0.921 | _pending_ | _pending_ |
+| cause accuracy | 0.876 | | |
 | false-alarm rate | 0.125 | | |
-| missed fires | 0.000 | | |
-| fog / dusty-road / vehicle cases | 0.00 / 0.63 / 0.67 | | |
+| missed fires | 0.006 | | |
+| unseen compositions | 1.00 (rules don't train) | | |
+| fog / dusty-road / vehicle cases | 0.00 / 0.67 / 0.70 | | |
 
 Regenerate: `python -m training.eval --report results/*.json`
 

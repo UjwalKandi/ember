@@ -25,6 +25,7 @@ struct DedupeEntry {
 
 struct PendingRelay {
   bool used;
+  bool retried;  // one retry if the Wi-Fi driver was out of buffers
   uint32_t dueMs;
   uint8_t len;
   uint8_t data[HEADER_LEN + MAX_BODY];
@@ -69,6 +70,7 @@ void scheduleRelay(const uint8_t *data, uint8_t len) {
   for (auto &r : relays) {
     if (r.used) continue;
     r.used = true;
+    r.retried = false;
     r.len = len;
     memcpy(r.data, data, len);
     r.data[5] -= 1;  // ttl
@@ -94,7 +96,11 @@ void handleRx(const RawRx &rx) {
   memcpy(f.body, rx.data + HEADER_LEN, f.len);
   f.body[f.len] = '\0';
 
-  if (f.ttl > 0) scheduleRelay(rx.data, HEADER_LEN + f.len);
+  // The gateway only floods its own TX; nodes don't relay commands addressed to themselves.
+  char mine[12];
+  snprintf(mine, sizeof(mine), "C|n%u|", self);
+  bool forMe = strncmp(f.body, mine, strlen(mine)) == 0;
+  if (f.ttl > 0 && self != 0 && !forMe) scheduleRelay(rx.data, HEADER_LEN + f.len);
   if (rxHandler) rxHandler(f);
 }
 
@@ -141,7 +147,12 @@ bool send(const char *body) {
   buf[7] = len;
   memcpy(buf + HEADER_LEN, body, len);
   remember(self, id);
-  return esp_now_send(BROADCAST, buf, HEADER_LEN + len) == ESP_OK;
+  esp_err_t err = esp_now_send(BROADCAST, buf, HEADER_LEN + len);
+  if (err == ESP_ERR_ESPNOW_NO_MEM) {  // TX buffers full: give the driver a moment, retry once
+    delay(5);
+    err = esp_now_send(BROADCAST, buf, HEADER_LEN + len);
+  }
+  return err == ESP_OK;
 }
 
 void loop() {
@@ -151,7 +162,11 @@ void loop() {
   uint32_t now = millis();
   for (auto &r : relays) {
     if (r.used && (int32_t)(now - r.dueMs) >= 0) {
-      esp_now_send(BROADCAST, r.data, r.len);
+      esp_err_t err = esp_now_send(BROADCAST, r.data, r.len);
+      if (err == ESP_ERR_ESPNOW_NO_MEM && !r.retried) {
+        r.retried = true;  // keep the slot, try again on the next loop()
+        continue;
+      }
       r.used = false;
     }
   }

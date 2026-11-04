@@ -65,8 +65,9 @@ def score(ep, out: Dict[str, Any], err) -> Dict[str, Any]:
     return row
 
 
-def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def summarize(rows: List[Dict[str, Any]], holdout=()) -> Dict[str, Any]:
     n = len(rows)
+    ood = [r for r in rows if r["scenario"] in holdout]
     fire = [r for r in rows if r["truth_verdict"] == "ALERT"]
     nofire = [r for r in rows if r["truth_verdict"] != "ALERT"]
     locs = [r["loc_err"] for r in fire if r["loc_err"] is not None]
@@ -83,6 +84,8 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "loc_err_m_median": sorted(locs)[len(locs) // 2] if locs else None,
         "unreliable_f1": round(sum(r["unrel_f1"] for r in rows) / n, 3),
         "avg_tool_calls": round(sum(r["tool_calls"] for r in rows) / n, 2),
+        "unseen_composition_acc": round(sum(r["verdict_ok"] and r["cause_ok"] for r in ood) / len(ood), 3)
+        if ood else None,
         "per_scenario": {k: round(sum(v) / len(v), 2) for k, v in sorted(per.items())},
     }
 
@@ -90,11 +93,11 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 def report(paths: List[str]) -> None:
     res = [json.load(open(p)) for p in paths]
     keys = ["valid_assessment", "verdict_acc", "cause_acc", "false_alarm_rate", "miss_rate",
-            "loc_err_m_median", "unreliable_f1", "avg_tool_calls"]
+            "loc_err_m_median", "unreliable_f1", "unseen_composition_acc", "avg_tool_calls"]
     print("| metric | " + " | ".join(r["name"] for r in res) + " |")
     print("|---|" + "---|" * len(res))
     for k in keys:
-        print(f"| {k} | " + " | ".join(str(r["summary"][k]) for r in res) + " |")
+        print(f"| {k} | " + " | ".join(str(r["summary"].get(k)) for r in res) + " |")
     for sc in res[0]["summary"]["per_scenario"]:
         print(f"| {sc} | " + " | ".join(str(r["summary"]["per_scenario"].get(sc)) for r in res) + " |")
 
@@ -125,7 +128,9 @@ def main() -> None:
     workers = 1 if args.agent == "heuristic" else args.workers
     with ThreadPoolExecutor(workers) as ex:
         rows = list(ex.map(lambda s: run_one(s, args), specs))
-    summ = summarize(rows)
+    manifest = Path(args.specs).parent / "manifest.json"
+    holdout = json.load(open(manifest))["holdout"] if manifest.exists() else []
+    summ = summarize(rows, holdout)
     Path(args.out).mkdir(exist_ok=True)
     path = Path(args.out) / f"{name}.json"
     json.dump({"name": name, "summary": summ, "rows": rows, "seconds": round(time.time() - t0)},

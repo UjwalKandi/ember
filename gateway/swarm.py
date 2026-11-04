@@ -70,14 +70,14 @@ class Swarm:
             n = self.nodes[nid] = NodeState(nid, 0.0, 0.0)
         n.last_seen, n.hops, n.rssi = t, rx.hops, rx.rssi
         if p.type == "H":
-            n.batt = p.get("b", n.batt)
+            n.batt = p.get("b") or n.batt      # boards without a battery divider omit b (or send b0)
             n.hz_hist.append(int(p.get("hz", 0)))
             n.snd_hist.append(int(p.get("snd", 0)))
         elif p.type == "E":
             n.code, n.conf = p.code or "OK", int(p.get("c", 0))
         elif p.type == "R":
             if p.code == "PONG":
-                n.batt = p.get("b", n.batt)
+                n.batt = p.get("b") or n.batt
             key = (nid, int(p.get("q", -1)))
             with self._lock:
                 w = self._waiters.get(key)
@@ -141,7 +141,8 @@ class Swarm:
             state = n.code if n.code == "OK" else f"{n.code} c{n.conf}"
             lines.append(f"n{n.id} {n.x:.0f},{n.y:.0f} | {seen} | h{n.hops} | {batt} | {hz} | {snd} | {state}")
         with self._lock:
-            recent = [e for e in self.log if now - e.t <= window and e.pkt.type in ("E", "R")]
+            # only node-initiated events: command replies reach the model through tool results
+            recent = [e for e in self.log if now - e.t <= window and e.pkt.type == "E"]
         recent = recent[-max_events:]
         lines.append(f"EVENTS last {int(window)}s ({len(recent)}):")
         for e in recent:
