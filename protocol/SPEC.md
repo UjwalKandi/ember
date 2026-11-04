@@ -1,0 +1,79 @@
+# Ember Link Protocol (ELP) v1
+
+ELP is the language spoken by every part of EMBER: the ESP32 firmware, the gateway, the simulator, and the fine-tuned Muse Glimmer model. It is designed under **Meshtastic-class constraints** so the transport can be swapped from ESP-NOW to LoRa without touching anything above it:
+
+- payload ≤ **200 bytes** of printable ASCII
+- managed flooding, hop limit **3**, duplicate suppression by `(src, pkt_id)`
+- low duty cycle: nodes send heartbeats every 30 s and events only on change
+
+Packets are pipe-delimited so the model can read raw packets directly.
+
+## 1. Over-the-air frame (ESP-NOW, broadcast)
+
+| byte | field    | notes                                      |
+|------|----------|--------------------------------------------|
+| 0    | magic    | `0xE7`                                     |
+| 1    | version  | `1`                                        |
+| 2-3  | pkt_id   | little-endian u16, per-source counter      |
+| 4    | src      | originating node id (1-254, 0 = gateway)   |
+| 5    | ttl      | starts at 3, decremented on each relay     |
+| 6    | hops     | starts at 0, incremented on each relay     |
+| 7    | len      | body length (≤ 200)                        |
+| 8..  | body     | ASCII ELP body (below)                     |
+
+A node relays a frame if `ttl > 0` and `(src, pkt_id)` is not in its 32-entry dedupe ring. Relays are delayed by a random 5-40 ms to reduce collisions (Meshtastic-style SNR-less jitter).
+
+## 2. Body grammar
+
+```
+body   := type "|" target "|" tokens
+type   := H | E | C | R
+target := "n" <id> | "*"            (* = broadcast, only for C)
+token  := key value                 (e.g. s42, c81, hz34, b3.9)
+        | CODE                      (e.g. FLM, CONFIRM)
+```
+
+### H: heartbeat (node → gateway, every 30 s)
+`H|n3|s41|b3.9|up812|hz2|snd3`
+
+| key | meaning |
+|---|---|
+| s   | sequence number |
+| b   | battery volts |
+| up  | uptime seconds |
+| hz  | haze index 0-100 (max over the last interval) |
+| snd | sound level 0-100 (max over the last interval) |
+
+### E: event (node → gateway, on detection or change)
+`E|n3|s42|FLM|c81|hz34|snd12`
+
+| code | meaning |
+|---|---|
+| FLM | flame-colored region detected by camera |
+| SMK | smoke / haze increase detected by camera |
+| CRK | crackling transients detected by microphone |
+| MOT | large motion / light change (vehicles, animals, headlights) |
+| OK  | node returned to baseline |
+
+`c` = detector confidence 0-100, `hz` = haze 0-100, `snd` = sound 0-100.
+
+### C: command (gateway → node)
+`C|n3|q7|PING`, `C|n3|q7|CONFIRM`, `C|n3|q7|SET|rate5`, `C|*|q8|ALERT|lvl2`
+
+| command | effect |
+|---|---|
+| PING    | node replies `PONG` with battery |
+| CONFIRM | node re-samples camera + mic for ~3 s and reports the result |
+| SET     | `rate<N>`: heartbeat/sampling interval in seconds |
+| ALERT   | `lvl0-3`: node shows alert (LED pattern); broadcast to all |
+
+`q` = query id chosen by the gateway; responses echo it.
+
+### R: response (node → gateway)
+`R|n3|q7|PONG|b3.9`, `R|n3|q7|CONF|FLM|c88|hz40|snd20`, `R|n3|q7|ACK`
+
+## 3. Gateway ↔ laptop (USB serial, 115200, newline-terminated)
+
+- gateway → laptop: `RX|<src>|<hops>|<rssi>|<body>` for every received frame
+- laptop → gateway: `TX|<body>`: the gateway floods it as src 0
+- gateway → laptop: `LOG|<text>` for diagnostics (ignored by the parser)

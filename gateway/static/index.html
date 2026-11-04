@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EMBER Command Center</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #2a313c; --text: #e6edf3; --muted: #8b949e;
+    --ok: #3fb950; --mot: #58a6ff; --smk: #a8a29e; --crk: #d29922; --flm: #f85149; --off: #484f58;
+    --accent: #ff7b39;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  .pill { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .pill.live { color: var(--ok); border-color: var(--ok); }
+  .spacer { flex: 1; }
+  button, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  main { display: grid; grid-template-columns: minmax(420px, 1.25fr) 1fr; grid-template-rows: 1fr 1fr; gap: 12px; padding: 12px; height: calc(100vh - 52px); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; }
+  section h2 { margin: 0; padding: 8px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  #mapwrap { grid-row: span 2; }
+  #map { width: 100%; flex: 1; min-height: 0; cursor: crosshair; }
+  .scroll { overflow-y: auto; padding: 8px 12px; flex: 1; min-height: 0; }
+  #feed { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #feed div { white-space: nowrap; }
+  .t { color: var(--muted); } .E { color: var(--crk); } .H { color: var(--muted); } .R { color: var(--mot); } .C { color: var(--accent); }
+  .FLM { color: var(--flm); font-weight: 600; } .SMK { color: var(--smk); font-weight: 600; }
+  #trace .call { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--accent); margin-top: 6px; }
+  #trace .res { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); margin-left: 14px; word-break: break-all; }
+  #trace .thought { color: var(--muted); font-style: italic; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+  .verdict { display: inline-block; padding: 3px 10px; border-radius: 6px; font-weight: 700; letter-spacing: .5px; }
+  .ALERT { background: var(--flm); color: #fff; } .WATCH { background: var(--crk); color: #111; } .DISMISS { background: var(--ok); color: #111; }
+  #report h2, #report h3 { font-size: 15px; margin: 6px 0; text-transform: none; letter-spacing: 0; color: var(--text); border: 0; padding: 0; }
+  #report code { background: #0b0f14; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+  #report ul { margin: 4px 0; padding-left: 20px; }
+  .truth { color: var(--muted); font-size: 12px; margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+  .legend { display: flex; gap: 10px; font-size: 11px; color: var(--muted); margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 3px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>EMBER</span> · swarm command center</h1>
+  <span class="pill" id="mode">connecting…</span>
+  <span class="pill" id="agentpill"></span>
+  <span class="spacer"></span>
+  <select id="scenario"></select>
+  <button id="reset">Load scenario</button>
+  <label class="pill"><input type="checkbox" id="auto"> auto-assess</label>
+  <button class="primary" id="assess">Assess now</button>
+</header>
+<main>
+  <section id="mapwrap">
+    <h2>Mesh map <span class="legend">
+      <span><i style="background:var(--ok)"></i>OK</span><span><i style="background:var(--mot)"></i>MOT</span>
+      <span><i style="background:var(--smk)"></i>SMK</span><span><i style="background:var(--crk)"></i>CRK</span>
+      <span><i style="background:var(--flm)"></i>FLM</span><span><i style="background:var(--off)"></i>silent</span>
+      <span>click map = ignite (sim)</span></span></h2>
+    <canvas id="map"></canvas>
+  </section>
+  <section>
+    <h2>Muse Glimmer: reasoning &amp; tool calls <span id="busy" class="pill" style="display:none">thinking…</span></h2>
+    <div class="scroll" id="trace"><span class="t">Waiting for an assessment.</span></div>
+  </section>
+  <section>
+    <h2>Situation report / live mesh traffic</h2>
+    <div class="scroll" id="report"><span class="t">No report yet.</span></div>
+    <div class="scroll" id="feed" style="max-height: 38%; border-top: 1px solid var(--line);"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { OK: '--ok', MOT: '--mot', SMK: '--smk', CRK: '--crk', FLM: '--flm' };
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let state = null, flashes = [], view = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+
+// --- map ---------------------------------------------------------------
+const canvas = $('map'), ctx = canvas.getContext('2d');
+function fit() {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', fit);
+
+function computeView() {
+  const xs = state.nodes.map(n => n.x), ys = state.nodes.map(n => n.y);
+  const minx = Math.min(...xs) - 120, maxx = Math.max(...xs) + 120, miny = Math.min(...ys) - 120, maxy = Math.max(...ys) + 120;
+  const r = canvas.getBoundingClientRect();
+  const s = Math.min(r.width / (maxx - minx), r.height / (maxy - miny));
+  const ox = (r.width - s * (maxx - minx)) / 2, oy = (r.height - s * (maxy - miny)) / 2;
+  view = { s, tx: x => ox + (x - minx) * s, ty: y => r.height - oy - (y - miny) * s,
+           ix: px => (px - ox) / s + minx, iy: py => (r.height - oy - py) / s + miny };
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!state || !state.nodes.length) return;
+  computeView();
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  // grid
+  ctx.strokeStyle = '#1c222b'; ctx.lineWidth = 1;
+  for (let g = -2000; g <= 3000; g += 100) {
+    ctx.beginPath(); ctx.moveTo(view.tx(g), 0); ctx.lineTo(view.tx(g), r.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, view.ty(g)); ctx.lineTo(r.width, view.ty(g)); ctx.stroke();
+  }
+  // simulated fires (ground truth overlay)
+  for (const f of state.fires || []) {
+    const g = ctx.createRadialGradient(view.tx(f.x), view.ty(f.y), 0, view.tx(f.x), view.ty(f.y), Math.max(8, (f.r + 40) * view.s));
+    g.addColorStop(0, 'rgba(255,90,40,.55)'); g.addColorStop(1, 'rgba(255,90,40,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(view.tx(f.x), view.ty(f.y), Math.max(8, (f.r + 40) * view.s), 0, 7); ctx.fill();
+  }
+  // mesh links
+  ctx.strokeStyle = '#2a313c'; ctx.setLineDash([3, 4]);
+  for (const a of state.nodes) for (const b of state.nodes) {
+    if (a.id < b.id && Math.hypot(a.x - b.x, a.y - b.y) < 260) {
+      ctx.beginPath(); ctx.moveTo(view.tx(a.x), view.ty(a.y)); ctx.lineTo(view.tx(b.x), view.ty(b.y)); ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  // packet flashes
+  const now = performance.now();
+  flashes = flashes.filter(f => now - f.at < 900);
+  for (const f of flashes) {
+    const n = state.nodes.find(n => n.id === f.src); if (!n) continue;
+    const k = (now - f.at) / 900;
+    ctx.strokeStyle = f.color; ctx.globalAlpha = 1 - k; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(view.tx(n.x), view.ty(n.y), 12 + k * 40, 0, 7); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineWidth = 1;
+  }
+  // nodes
+  for (const n of state.nodes) {
+    const silent = n.age === null || n.age > 90;
+    const c = silent ? css('--off') : css(COLORS[n.code] || '--ok');
+    const x = view.tx(n.x), y = view.ty(n.y);
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#0e1116'; ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1;
+    ctx.fillStyle = css('--text'); ctx.font = '600 12px system-ui'; ctx.fillText('n' + n.id, x + 14, y - 4);
+    ctx.fillStyle = css('--muted'); ctx.font = '11px ui-monospace, Menlo';
+    const meta = (n.code !== 'OK' ? n.code + ' c' + n.conf + ' ' : '') + 'hz' + (n.hz[0] ?? 0) + ' h' + n.hops + (n.batt ? ' ' + n.batt.toFixed(1) + 'V' : '');
+    ctx.fillText(meta, x + 14, y + 10);
+  }
+  // wind arrow
+  const w = state.wind, cx = r.width - 60, cy = 60, rad = w.toward_deg * Math.PI / 180;
+  ctx.strokeStyle = css('--mot'); ctx.fillStyle = css('--mot'); ctx.lineWidth = 2;
+  const dx = Math.sin(rad) * 26, dy = -Math.cos(rad) * 26;
+  ctx.beginPath(); ctx.moveTo(cx - dx, cy - dy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx + dx, cy + dy, 4, 0, 7); ctx.fill(); ctx.lineWidth = 1;
+  ctx.fillStyle = css('--muted'); ctx.font = '11px system-ui'; ctx.fillText('wind ' + Math.round(w.kmh) + ' km/h', cx - 34, cy + 44);
+  // assessment marker
+  const a = lastAssessment && lastAssessment.assessment;
+  if (a && a.location) {
+    const x = view.tx(a.location.x), y = view.ty(a.location.y);
+    ctx.strokeStyle = css('--accent'); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x - 9, y - 9); ctx.lineTo(x + 9, y + 9); ctx.moveTo(x + 9, y - 9); ctx.lineTo(x - 9, y + 9); ctx.stroke();
+    ctx.fillStyle = css('--accent'); ctx.font = '600 11px system-ui'; ctx.fillText('EMBER estimate', x + 12, y + 4); ctx.lineWidth = 1;
+  }
+}
+
+canvas.addEventListener('click', (e) => {
+  if (!view) return;
+  const r = canvas.getBoundingClientRect();
+  api('/api/ignite', { x: view.ix(e.clientX - r.left), y: view.iy(e.clientY - r.top) });
+});
+
+// --- panels ------------------------------------------------------------
+let lastAssessment = null;
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function md(s) {
+  let html = '', inList = false;
+  for (const line of esc(s).split('\n')) {
+    let l = line.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+    if (/^\s*[-*] /.test(l)) { if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + l.replace(/^\s*[-*] /, '') + '</li>'; continue; }
+    if (inList) { html += '</ul>'; inList = false; }
+    if (l.startsWith('### ')) html += '<h3>' + l.slice(4) + '</h3>';
+    else if (l.startsWith('## ')) html += '<h2>' + l.slice(3) + '</h2>';
+    else if (l.trim()) html += '<div>' + l + '</div>';
+  }
+  return html + (inList ? '</ul>' : '');
+}
+
+function packetHTML(raw) {
+  const parts = raw.split('|');
+  return `<span class="${parts[0]}">${parts[0]}</span>|` + parts.slice(1).map(p => `<span class="${p}">${esc(p)}</span>`).join('|');
+}
+
+function addFeed(ev) {
+  const feed = $('feed'), div = document.createElement('div');
+  div.innerHTML = `<span class="t">${ev.t.toFixed(0).padStart(5)}s h${ev.hops} ${ev.rssi}dBm</span> ${packetHTML(ev.raw)}`;
+  feed.prepend(div);
+  while (feed.children.length > 150) feed.lastChild.remove();
+  const code = ev.raw.split('|')[0] === 'E' ? ev.raw.split('|')[3] : null;
+  flashes.push({ src: ev.src, at: performance.now(), color: code && COLORS[code] ? css(COLORS[code]) : '#58a6ff55' });
+}
+
+function addTrace(ev) {
+  const t = $('trace');
+  if (ev.kind === 'start') { t.innerHTML = `<div class="t">assessment started (${ev.trigger}, ${ev.agent})</div>`; return; }
+  const d = document.createElement('div');
+  if (ev.kind === 'call') { d.className = 'call'; d.textContent = `→ ${ev.name}(${JSON.stringify(ev.args)})`; }
+  else if (ev.kind === 'result') { d.className = 'res'; d.textContent = `← ${ev.result}`; }
+  else if (ev.kind === 'thought') { d.className = 'thought'; d.textContent = ev.text; }
+  else if (ev.kind === 'error') { d.className = 'call'; d.style.color = 'var(--flm)'; d.textContent = 'error: ' + ev.text; }
+  else return;
+  t.appendChild(d); t.scrollTop = t.scrollHeight;
+}
+
+function showAssessment(rec) {
+  lastAssessment = rec;
+  const a = rec.assessment || {};
+  let html = a.verdict ? `<span class="verdict ${a.verdict}">${a.verdict}</span> <b>${esc(a.cause || '')}</b> · severity ${a.severity} · conf ${a.confidence}<br>` : '';
+  html += md(rec.report || '');
+  if (rec.truth) html += `<div class="truth">sim ground truth: ${rec.truth.verdict} / ${rec.truth.cause}` +
+    (rec.truth.fire_xy ? ` at (${rec.truth.fire_xy.join(', ')})` : '') + `</div>`;
+  $('report').innerHTML = html;
+}
+
+function applyState(s) {
+  state = s;
+  $('mode').textContent = s.real ? 'live hardware' + (s.scenario ? ' + sim' : '') : 'simulation: ' + s.scenario;
+  $('mode').className = 'pill live';
+  $('agentpill').textContent = s.agent === 'llm' ? 'agent: Muse Glimmer' : 'agent: heuristic baseline';
+  $('busy').style.display = s.busy ? '' : 'none';
+  $('assess').disabled = s.busy;
+  $('auto').checked = s.auto;
+}
+
+async function init() {
+  fit();
+  const s = await api('/api/state');
+  $('scenario').innerHTML = s.scenarios.map(x => `<option ${x === s.scenario ? 'selected' : ''}>${x}</option>`).join('');
+  applyState(s);
+  if (s.history.length) showAssessment(s.history[s.history.length - 1]);
+  for (const ev of s.trace) addTrace(ev);
+  const es = new EventSource('/events');
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'state') applyState(ev);
+    else if (ev.type === 'pkt') addFeed(ev);
+    else if (ev.type === 'agent') addTrace(ev);
+    else if (ev.type === 'assessment') showAssessment(ev);
+    else if (ev.type === 'reset') { $('feed').innerHTML = ''; $('trace').innerHTML = ''; $('report').innerHTML = '<span class="t">No report yet.</span>'; lastAssessment = null; }
+    else if (ev.type === 'log') addFeed({ t: state ? state.t : 0, hops: 0, rssi: 0, src: -1, raw: 'C|log|' + ev.text });
+  };
+  draw();
+}
+$('assess').onclick = () => api('/api/assess', {});
+$('reset').onclick = () => api('/api/scenario', { scenario: $('scenario').value });
+$('auto').onchange = (e) => api('/api/auto', { on: e.target.checked });
+init();
+</script>
+</body>
+</html>

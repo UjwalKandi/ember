@@ -1,0 +1,15 @@
+{
+  "comment": "Demo layout. ids marked real are XIAO boards (flash with -DNODE_ID=<id>); the rest are simulated when --sim is given. Units: meters, +x east, +y north. Measure or pace out real positions.",
+  "wind": {"toward_deg": 45, "kmh": 15},
+  "nodes": [
+    {"id": 1, "x": 0,   "y": 0,   "real": true},
+    {"id": 2, "x": 180, "y": 10,  "real": true},
+    {"id": 3, "x": 360, "y": 0,   "real": true},
+    {"id": 4, "x": 0,   "y": 190},
+    {"id": 5, "x": 190, "y": 200},
+    {"id": 6, "x": 370, "y": 180},
+    {"id": 7, "x": 10,  "y": 380},
+    {"id": 8, "x": 180, "y": 370},
+    {"id": 9, "x": 360, "y": 390}
+  ]
+}

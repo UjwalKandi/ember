@@ -1,0 +1,3 @@
+# Gateway/simulator/eval are stdlib-only (Python 3.9+). Optional extras:
+pyserial>=3.5      # hardware mode (gateway XIAO over USB)
+modal>=1.0         # training + serving on Modal (training/modal_app.py)
