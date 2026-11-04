@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EMBER: flash a node</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  body { margin: 0; background: #0e1116; color: #e6edf3; font: 15px/1.6 -apple-system, system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { margin: 0 0 4px; font-size: 26px; } h1 span { color: #ff7b39; }
+  .muted { color: #8b949e; }
+  .card { background: #161b22; border: 1px solid #2a313c; border-radius: 10px; padding: 18px 20px; margin: 18px 0; }
+  ol { padding-left: 22px; } li { margin: 6px 0; }
+  code { background: #0b0f14; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  a { color: #58a6ff; }
+  esp-web-install-button button, .btn { background: #ff7b39; color: #111; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 700; font-size: 15px; cursor: pointer; text-decoration: none; display: inline-block; }
+  .warn { color: #d29922; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>EMBER</span> · flash a swarm node</h1>
+  <div class="muted">Firmware <code>__FW_VERSION__</code> · XIAO ESP32-S3 Sense · one image for every board (node or gateway)</div>
+
+  <div class="card">
+    <b>1. Install the firmware</b>
+    <ol>
+      <li>Use <b>Chrome or Edge</b> on a laptop (Safari and Firefox can't talk to USB devices).</li>
+      <li>Plug the XIAO in with a USB-C <b>data</b> cable.</li>
+      <li>Click the button below, choose the port (e.g. <code>USB JTAG/serial debug unit</code> or <code>cu.usbmodem…</code>), then <b>Install</b>.</li>
+    </ol>
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate">Install EMBER firmware</button>
+      <span slot="unsupported" class="warn">This browser can't flash devices. Open this page in Chrome or Edge.</span>
+      <span slot="not-allowed" class="warn">Flashing needs a secure (https) page.</span>
+    </esp-web-install-button>
+    <p class="muted">Port doesn't appear, or the install fails to connect? Hold the tiny <b>B</b> (BOOT) button, tap <b>R</b> (RESET), release B, and try again. "Erase device" wipes the saved node id, so you'll need to set it again in step 2.</p>
+  </div>
+
+  <div class="card">
+    <b>2. Set it up and test it</b>
+    <ol>
+      <li>Open the <a href="console.html">EMBER serial console</a>, click <b>Connect</b>, and pick the same port.</li>
+      <li>Give the board its identity: <code>CFG|id=1</code> (2, 3, … for the next boards) or <code>CFG|role=gateway</code>. It reboots.</li>
+      <li>Click <b>Self-test</b>. You want <code>LOG|selftest PASS</code>.</li>
+      <li>Within 30 s you'll see heartbeats like <code>RX|1|0|0|H|n1|s1|up5|hz4|snd5</code>.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <b>3. Use it with the command center</b>
+    <p>Close the console tab first (only one program can use the port). Then on the laptop:</p>
+    <code>python -m gateway.server --serial /dev/cu.usbmodemXXXX --nodes config/nodes-single.json --sim quiet --auto</code>
+    <p class="muted">A single node plugged in over USB works as its own gateway. Full guide: <a href="https://github.com/UjwalKandi/ember/blob/main/docs/SETUP_GUIDE.md">docs/SETUP_GUIDE.md</a></p>
+  </div>
+</main>
+</body>
+</html>

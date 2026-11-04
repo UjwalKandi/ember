@@ -1,10 +1,16 @@
 #pragma once
 
-// Build-time configuration shared by both roles.
+// Build-time configuration shared by both roles. Role and node id are runtime settings
+// (settings.h), so one firmware image serves every board.
 
 #ifndef NODE_ID
-#define NODE_ID 1  // override with -DNODE_ID=<1-254>
+#define NODE_ID 0  // default id before provisioning (0 = unprovisioned); set with CFG|id=<n>
 #endif
+
+#ifndef EMBER_GIT
+#define EMBER_GIT "dev"  // CI passes the commit hash
+#endif
+#define EMBER_FW "v2-" EMBER_GIT
 
 #define EMBER_CHANNEL 1          // fixed Wi-Fi channel for ESP-NOW
 #define EMBER_DEFAULT_TTL 3      // hop limit (Meshtastic default)

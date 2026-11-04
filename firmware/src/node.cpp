@@ -1,13 +1,18 @@
 // Sensor node: on-device detection, compact ELP events, command handling.
-#ifdef EMBER_ROLE_NODE
-
+//
+// A node plugged into a laptop also acts as a USB bridge (protocol/SPEC.md §3): it prints
+// its own packets and every mesh frame it hears as RX| lines and accepts TX| lines, so a
+// single board works with the command center without a separate gateway.
 #include <Arduino.h>
+#include <WiFi.h>
 
 #include "config.h"
 #include "mesh.h"
 #include "roles.h"
+#include "selftest.h"
 #include "sense_cam.h"
 #include "sense_mic.h"
+#include "settings.h"
 
 namespace node {
 namespace {
@@ -41,11 +46,13 @@ struct PendingCmd {
   bool rebase; // SET|rebase1
 };
 
+uint8_t selfId = 0;  // from settings::nodeId(); 0 = unprovisioned
 uint32_t seq = 0;
 uint32_t heartbeatS = EMBER_HEARTBEAT_S;
 uint32_t lastSample = 0, lastHeartbeat = 0;
 uint8_t maxHaze = 0, maxSnd = 0;
-bool camOk = false, micOk = false;
+bool camOk = false, micOk = false, meshOk = false;
+char consoleLine[256];
 
 Code active = OK;
 uint8_t lastSentConf = 0;
@@ -74,7 +81,7 @@ void battToken(char *out, size_t n) {
 
 void send(const char *body) {
   mesh::send(body);
-  Serial.printf("TX %s\n", body);  // local debug echo
+  Serial.printf("RX|%u|0|0|%s\n", selfId, body);  // USB bridge: our own packet, zero hops
 }
 
 Scores measure(uint32_t micWindowMs) {
@@ -102,7 +109,7 @@ Code classify(const Scores &sc) {
 void sendEvent(Code code, const Scores &sc) {
   uint8_t conf = code == OK ? 0 : sc.s[code];
   char body[EMBER_MAX_BODY + 1];
-  snprintf(body, sizeof(body), "E|n%d|s%lu|%s|c%d|hz%d|snd%d", NODE_ID, (unsigned long)++seq,
+  snprintf(body, sizeof(body), "E|n%d|s%lu|%s|c%d|hz%d|snd%d", selfId, (unsigned long)++seq,
            CODE_NAMES[code], conf, sc.haze, sc.snd);
   send(body);
   lastSentConf = conf;
@@ -111,7 +118,7 @@ void sendEvent(Code code, const Scores &sc) {
 void sendHeartbeat() {
   char body[EMBER_MAX_BODY + 1], batt[12];
   battToken(batt, sizeof(batt));
-  snprintf(body, sizeof(body), "H|n%d|s%lu%s|up%lu|hz%d|snd%d", NODE_ID,
+  snprintf(body, sizeof(body), "H|n%d|s%lu%s|up%lu|hz%d|snd%d", selfId,
            (unsigned long)++seq, batt, (unsigned long)(millis() / 1000), maxHaze, maxSnd);
   send(body);
   maxHaze = maxSnd = 0;
@@ -156,10 +163,11 @@ void tick() {
 
 // --- commands -----------------------------------------------------------
 
-void onFrame(const mesh::Frame &f) {
-  if (f.body[0] != 'C') return;
+// Queue a command body (from the mesh or from USB) if it is addressed to us or to '*'.
+void handleCommand(const char *body) {
+  if (body[0] != 'C') return;
   char buf[EMBER_MAX_BODY + 1];
-  strncpy(buf, f.body, sizeof(buf));
+  strncpy(buf, body, sizeof(buf));
   buf[sizeof(buf) - 1] = '\0';
 
   PendingCmd cmd = {true, millis(), -1, "", -1, -1, -1, -1, false};
@@ -169,9 +177,9 @@ void onFrame(const mesh::Frame &f) {
     if (idx == 0) continue;  // "C"
     if (idx == 1) {
       bool all = strcmp(tok, "*") == 0;
-      if (!all && !(tok[0] == 'n' && atoi(tok + 1) == NODE_ID)) return;
+      if (!all && !(tok[0] == 'n' && atoi(tok + 1) == selfId)) return;
       // Stagger replies to broadcasts so every node doesn't answer at once.
-      if (all) cmd.dueMs += random(0, 50 * NODE_ID);
+      if (all) cmd.dueMs += random(0, 50 * selfId);
       continue;
     }
     if (tok[0] == 'q' && isdigit(tok[1])) cmd.qid = atoi(tok + 1);
@@ -191,6 +199,26 @@ void onFrame(const mesh::Frame &f) {
     }
   }
 }
+
+void onFrame(const mesh::Frame &f) {
+  Serial.printf("RX|%u|%u|%d|%s\n", f.src, f.hops, f.rssi, f.body);  // USB bridge
+  handleCommand(f.body);
+}
+
+// USB bridge input: TX|<body> is handled locally if it targets us, and flooded to the mesh.
+void handleConsoleLine(const char *l) {
+  if (strncmp(l, "TX|", 3) != 0) {
+    Serial.printf("LOG|ignored line: %s\n", l);
+    return;
+  }
+  const char *body = l + 3;
+  handleCommand(body);
+  char self[8];
+  snprintf(self, sizeof(self), "C|n%u|", selfId);
+  if (strncmp(body, self, strlen(self)) != 0) mesh::send(body);
+}
+
+void runSelftest() { selftest::run(meshOk, camOk, micOk, true); }
 
 void confirm(int qid) {
   // ~3 s burst of 6 samples, averaged so one noisy frame can't decide the answer.
@@ -215,7 +243,7 @@ void confirm(int qid) {
   Code code = classify(avg);
   uint8_t conf = code == OK ? 0 : avg.s[code];
   char body[EMBER_MAX_BODY + 1];
-  snprintf(body, sizeof(body), "R|n%d|q%d|CONF|%s|c%d|hz%d|snd%d", NODE_ID, qid,
+  snprintf(body, sizeof(body), "R|n%d|q%d|CONF|%s|c%d|hz%d|snd%d", selfId, qid,
            CODE_NAMES[code], conf, avg.haze, avg.snd);
   send(body);
 }
@@ -225,7 +253,7 @@ void runCommand(const PendingCmd &cmd) {
   if (strcmp(cmd.cmd, "PING") == 0) {
     char batt[12];
     battToken(batt, sizeof(batt));
-    snprintf(body, sizeof(body), "R|n%d|q%d|PONG%s", NODE_ID, cmd.qid, batt);
+    snprintf(body, sizeof(body), "R|n%d|q%d|PONG%s", selfId, cmd.qid, batt);
     send(body);
   } else if (strcmp(cmd.cmd, "CONFIRM") == 0) {
     confirm(cmd.qid);
@@ -236,7 +264,7 @@ void runCommand(const PendingCmd &cmd) {
     if (cmd.smk >= 0) THRESHOLD[SMK] = constrain(cmd.smk, 0, SMK_MUTED);
     if (cmd.flk >= 0) flickerCheck = cmd.flk == 1;
     if (cmd.rebase && camOk) cam::rebase();
-    snprintf(body, sizeof(body), "R|n%d|q%d|ACK", NODE_ID, cmd.qid);
+    snprintf(body, sizeof(body), "R|n%d|q%d|ACK", selfId, cmd.qid);
     send(body);
   } else if (strcmp(cmd.cmd, "ALERT") == 0) {
     alertLevel = constrain(cmd.lvl, 0, 3);
@@ -258,19 +286,40 @@ void updateLed(uint32_t now) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);  // never block when no host is listening
+  uint32_t t0 = millis();
+  while (!Serial && millis() - t0 < 1500) delay(10);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
+  console::begin(runSelftest);
 
-  bool meshOk = mesh::begin(NODE_ID, onFrame);
+  selfId = settings::nodeId();
+  if (selfId == 0) {
+    Serial.printf("LOG|EMBER %s role=node UNPROVISIONED: send CFG|id=<1-254>\n", EMBER_FW);
+    return;  // stay idle (no radio, no sensors) until provisioned
+  }
+  meshOk = mesh::begin(selfId, onFrame);
   camOk = cam::begin();
   micOk = mic::begin();
-  Serial.printf("EMBER node n%d mesh=%d cam=%d mic=%d\n", NODE_ID, meshOk, camOk, micOk);
+  Serial.printf("LOG|EMBER %s role=node id=%u mac=%s mesh=%s cam=%s mic=%s\n", EMBER_FW, selfId,
+                WiFi.macAddress().c_str(), meshOk ? "ok" : "FAIL", camOk ? "ok" : "FAIL",
+                micOk ? "ok" : "FAIL");
   lastHeartbeat = millis() - heartbeatS * 1000;  // heartbeat right away
 }
 
 void loop() {
   uint32_t now = millis();
+  if (selfId == 0) {
+    static uint32_t lastNag = 0;
+    console::poll(consoleLine, sizeof(consoleLine));   // only CFG/TEST/REBOOT do anything here
+    if (now - lastNag > 5000) {
+      lastNag = now;
+      Serial.println("LOG|unprovisioned: send CFG|id=<1-254>");
+    }
+    return;
+  }
   mesh::loop();
+  if (console::poll(consoleLine, sizeof(consoleLine))) handleConsoleLine(consoleLine);
 
   for (auto &slot : cmdQueue) {
     if (slot.used && (int32_t)(now - slot.dueMs) >= 0) {
@@ -292,5 +341,3 @@ void loop() {
 }
 
 }  // namespace node
-
-#endif  // EMBER_ROLE_NODE

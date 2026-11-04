@@ -35,6 +35,11 @@ class ProtocolTests(unittest.TestCase):
         rx = elp.parse_serial("RX|4|2|-71|E|n4|s9|CRK|c60|hz20|snd55")
         self.assertEqual((rx.src, rx.hops, rx.rssi, rx.packet.code), (4, 2, -71, "CRK"))
         self.assertIsNone(elp.parse_serial("LOG|boot ok"))
+        # firmware console output is never mistaken for packets
+        for line in ("LOG|selftest PASS", "LOG|cfg role=node id=1 fw=v2-dev", "LOG|unprovisioned: send CFG|id=<1-254>"):
+            self.assertIsNone(elp.parse_serial(line))
+        own = elp.parse_serial("RX|1|0|0|H|n1|s1|up5|hz4|snd5")     # a node bridging its own packet
+        self.assertEqual((own.src, own.hops, own.packet.node), (1, 0, 1))
         self.assertEqual(elp.tx_line(elp.command("n2", 5, "PING")), "TX|C|n2|q5|PING\n")
 
     def test_sim_packets_fit_meshtastic_budget(self):

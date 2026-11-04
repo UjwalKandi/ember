@@ -1,0 +1,76 @@
+# Builds the EMBER firmware in the cloud and publishes the browser flasher (GitHub Pages).
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", "site/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install PlatformIO + esptool
+        run: pip install platformio "esptool<5"
+
+      - name: Build
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DEMBER_GIT=\"${{ github.sha }}\"
+        run: pio run -d firmware -e ember
+
+      - name: Merge into one flashable image (offset 0x0)
+        run: |
+          B=firmware/.pio/build/ember
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
+          echo "boot_app0: $BOOT_APP0"
+          python -m esptool --chip esp32s3 merge_bin -o site/firmware/ember-factory.bin \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
+          ls -l site/firmware/
+          SHORT=${GITHUB_SHA::7}
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"v2-$SHORT\"/" site/manifest.json
+          sed -i "s/__FW_VERSION__/v2-$SHORT/g" site/index.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ember-firmware
+          path: site/firmware/ember-factory.bin
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: site
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

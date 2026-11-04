@@ -1,6 +1,6 @@
 #pragma once
 
-// Role entry points; main.cpp picks one at compile time.
+// Role entry points; main.cpp picks one at boot from the stored role.
 namespace node {
 void setup();
 void loop();

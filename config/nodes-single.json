@@ -1,0 +1,12 @@
+{
+  "comment": "Single-board bring-up: node 1 is the real XIAO plugged in over USB (it bridges itself); 2-6 are simulated around it.",
+  "wind": {"toward_deg": 45, "kmh": 15},
+  "nodes": [
+    {"id": 1, "x": 0,   "y": 0,   "real": true},
+    {"id": 2, "x": 180, "y": 10},
+    {"id": 3, "x": 360, "y": 0},
+    {"id": 4, "x": 0,   "y": 190},
+    {"id": 5, "x": 190, "y": 200},
+    {"id": 6, "x": 370, "y": 180}
+  ]
+}

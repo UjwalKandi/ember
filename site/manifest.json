@@ -1,0 +1,11 @@
+{
+  "name": "EMBER swarm node",
+  "version": "dev",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [{ "path": "firmware/ember-factory.bin", "offset": 0 }]
+    }
+  ]
+}

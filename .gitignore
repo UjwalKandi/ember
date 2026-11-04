@@ -6,3 +6,4 @@ results/*
 !results/heuristic.json
 firmware/.pio/
 .DS_Store
+site/firmware/*.bin

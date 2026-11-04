@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EMBER serial console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin: 0; background: #0e1116; color: #e6edf3; font: 14px/1.5 -apple-system, system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 10px 16px; border-bottom: 1px solid #2a313c; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  header b span { color: #ff7b39; }
+  button { background: #161b22; color: #e6edf3; border: 1px solid #2a313c; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button.primary { background: #ff7b39; border-color: #ff7b39; color: #111; font-weight: 700; }
+  button:disabled { opacity: .45; cursor: default; }
+  input { background: #0b0f14; color: #e6edf3; border: 1px solid #2a313c; border-radius: 6px; padding: 6px 8px; font: 13px ui-monospace, Menlo, monospace; }
+  #log { flex: 1; overflow-y: auto; padding: 10px 16px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .rx { color: #e6edf3; } .log { color: #8b949e; } .pass { color: #3fb950; font-weight: 700; } .fail { color: #f85149; font-weight: 700; }
+  .ev { color: #d29922; } .out { color: #ff7b39; } .sys { color: #58a6ff; }
+  footer { padding: 8px 16px; border-top: 1px solid #2a313c; display: flex; gap: 8px; }
+  footer input { flex: 1; }
+  .sep { width: 1px; height: 22px; background: #2a313c; margin: 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <b><span>EMBER</span> console</b>
+  <button class="primary" id="connect">Connect</button>
+  <span class="sep"></span>
+  <button data-send="CFG?">Show config</button>
+  <input id="id" type="number" min="1" max="254" value="1" style="width:60px">
+  <button id="setid">Set node id</button>
+  <button data-send="CFG|role=gateway">Make gateway</button>
+  <button data-send="CFG|role=node">Make node</button>
+  <span class="sep"></span>
+  <button data-send="TEST">Self-test</button>
+  <button data-self="PING">Ping self</button>
+  <button data-self="CONFIRM">Re-sample (CONFIRM)</button>
+  <button data-self="SET|rebase1">Rebase haze</button>
+  <button data-send="REBOOT">Reboot</button>
+  <span class="sep"></span>
+  <button id="clear">Clear</button>
+</header>
+<div id="log"><span class="sys">Chrome or Edge only. Click Connect and choose the XIAO's port. Close this tab before starting the command center (only one program can use the port).
+</span></div>
+<footer>
+  <input id="line" placeholder="Type a line and press Enter, e.g. CFG|id=2  or  TX|C|n1|q7|CONFIRM" disabled>
+  <button id="send" disabled>Send</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+let port = null, writer = null, nodeId = null, q = 100;
+const enc = new TextEncoder();
+
+function print(text, cls = 'rx') {
+  const log = $('log'), span = document.createElement('span');
+  span.className = cls;
+  span.textContent = text + '\n';
+  log.appendChild(span);
+  while (log.childNodes.length > 2000) log.firstChild.remove();
+  log.scrollTop = log.scrollHeight;
+}
+
+function classify(line) {
+  if (line.includes('selftest PASS')) return 'pass';
+  if (line.includes('FAIL') || line.includes('error')) return 'fail';
+  if (line.startsWith('LOG|')) return 'log';
+  if (/\|E\|/.test(line) || /\|R\|/.test(line)) return 'ev';
+  return 'rx';
+}
+
+function track(line) {
+  const m = line.match(/(?:role=node id=|cfg role=node id=)(\d+)/);
+  if (m && m[1] !== '0') { nodeId = m[1]; $('id').value = nodeId; }
+}
+
+async function send(text) {
+  if (!writer) return;
+  await writer.write(enc.encode(text + '\n'));
+  print('> ' + text, 'out');
+}
+
+async function readLoop() {
+  const decoder = new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  let buf = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).replace(/\r$/, '');
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        track(line);
+        print(line, classify(line));
+      }
+    }
+  } catch (e) {
+    print('disconnected: ' + e.message, 'fail');
+  }
+  setConnected(false);
+}
+
+function setConnected(on) {
+  document.querySelectorAll('header button:not(#connect):not(#clear), footer button, footer input')
+    .forEach(el => el.disabled = !on);
+  $('connect').textContent = on ? 'Connected' : 'Connect';
+  $('connect').disabled = on;
+}
+
+$('connect').onclick = async () => {
+  if (!('serial' in navigator)) { print('This browser has no Web Serial. Use Chrome or Edge.', 'fail'); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    setConnected(true);
+    print('connected. Asking the board for its config...', 'sys');
+    readLoop();
+    setTimeout(() => send('CFG?'), 300);
+  } catch (e) {
+    print('could not open port: ' + e.message, 'fail');
+  }
+};
+document.querySelectorAll('[data-send]').forEach(b => b.onclick = () => send(b.dataset.send));
+document.querySelectorAll('[data-self]').forEach(b => b.onclick = () => {
+  if (!nodeId) { print('Set a node id first (or click Show config).', 'fail'); return; }
+  send(`TX|C|n${nodeId}|q${q++}|${b.dataset.self}`);
+});
+$('setid').onclick = () => send('CFG|id=' + $('id').value);
+$('send').onclick = () => { const v = $('line').value.trim(); if (v) { send(v); $('line').value = ''; } };
+$('line').addEventListener('keydown', e => { if (e.key === 'Enter') $('send').click(); });
+$('clear').onclick = () => { $('log').innerHTML = ''; };
+setConnected(false);
+</script>
+</body>
+</html>

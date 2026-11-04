@@ -1,13 +1,16 @@
 #include <Arduino.h>
 
 #include "roles.h"
+#include "settings.h"
 
-#if defined(EMBER_ROLE_GATEWAY)
-void setup() { gateway::setup(); }
-void loop() { gateway::loop(); }
-#elif defined(EMBER_ROLE_NODE)
-void setup() { node::setup(); }
-void loop() { node::loop(); }
-#else
-#error "Build with -DEMBER_ROLE_NODE or -DEMBER_ROLE_GATEWAY (use the PlatformIO envs)"
-#endif
+// One image for every board: the role (node or gateway) is read from flash at boot.
+void setup() {
+  settings::begin();
+  if (settings::role() == settings::GATEWAY) gateway::setup();
+  else node::setup();
+}
+
+void loop() {
+  if (settings::role() == settings::GATEWAY) gateway::loop();
+  else node::loop();
+}
