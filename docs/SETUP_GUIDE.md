@@ -185,7 +185,7 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 |---|---|---|
 | a | Leave it still in a quiet room for 2 min | `hz` and `snd` in the `H|` lines stay around **3–10**. Note the typical values |
 | b | Hold a lighter flame **10–15 cm** from the camera so it fills a visible part of the image (a fire video full-screen on a phone also works) | `RX|1|0|0|E|n1|…|FLM|c40…` (yellow line). Still no FLM? See **Camera calibration** below |
-| c | Hold a phone flashlight **steady** at the camera → **Re-sample (CONFIRM)** | `R|n1|q…|CONF|…`, and the code is **not** `FLM` |
+| c | Hold a phone flashlight **steady** at the camera (and point it at a room lamp) | **No FLM.** `Camera check` shows `(steady light: suppressed)`, flicker ≤5% |
 | d | Lighter again → **Re-sample (CONFIRM)** | `CONF|FLM|c40+` (real flames flicker, so they pass) |
 | e | Breathe on the lens / cover it with tissue until `SMK` appears → **Rebase haze** | `R|n1|…|ACK`, then the node returns to `OK` |
 | f | **Ping self** | `R|n1|q…|PONG` |
@@ -218,6 +218,8 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 4. Stop with **Ctrl+C**.
 
 **✅ C1 success gate:** all of steps 4–8 pass. Send the results (especially the 7a numbers). Fix anything that fails **before** flashing more boards.
+
+> **Status 2026-11-04:** board 1 passed C1. Measurements, issues and fixes are in **[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md)**. Reference `Camera check` readings for a good board: nothing → flame 0; lighter at 10–15 cm → flicker ~20–40%, flame ≥ 40; lamp or flashlight → flicker ≤ 5%, `(steady light: suppressed)`.
 
 ### C2. Replicate (only after C1 passes)
 
@@ -409,3 +411,7 @@ EMBER is one instance of a general pattern: **an LLM agent that operates a low-b
 - **Labels must be observable.** If the evidence isn't in the context, the model learns to hallucinate. Check with a script.
 - **Don't let the baseline saturate.** If rules score ~99%, fine-tuning has nothing to prove; add realistic look-alikes.
 - **Watch flicker/debounce logic for toggling.** A suppression rule can create more events than it removes; measure after-action effects.
+- **Calibrate cameras with labeled tests, not guesses.** Run `CAM?` for "nothing / flame / flashlight / lamp" and compare. That's how we found the RGB565 byte order was swapped and that colour alone can't tell lamps from flames.
+- **Use robust temporal statistics.** The median consecutive-frame change beat (max−min)/mean, which a single auto-exposure frame or slow drift fooled.
+- **Make detectors tunable at runtime** (NVS + console commands). Each calibration round took minutes instead of a rebuild and reflash.
+- **One firmware image + runtime identity** (role/id in flash) plus a node that bridges itself over USB makes single-board bring-up and replication trivial.

@@ -71,7 +71,7 @@ Regenerate: `python -m training.eval --report results/*.json`
 
 ## Quickstart
 
-Full step-by-step runbook (setup, accounts, hardware, training, eval, demo, plus how to reuse this blueprint): **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**. Demo flow: [docs/demo-script.md](docs/demo-script.md).
+Full step-by-step runbook (setup, accounts, hardware, training, eval, demo, plus how to reuse this blueprint): **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**. Hardware bring-up results and camera calibration: [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md). Demo flow: [docs/demo-script.md](docs/demo-script.md). Browser flasher + serial console: https://ujwalkandi.in/ember/
 
 ```bash
 # 1. Command center on a fully simulated swarm (no hardware, no GPU)
@@ -100,10 +100,13 @@ python3 -m unittest discover -s tests -v
 
 ```
 protocol/SPEC.md        Ember Link Protocol: frame, packet grammar, serial bridge
-firmware/               XIAO ESP32-S3 Sense: ESP-NOW flood mesh, camera + mic detectors, node & gateway roles
+firmware/               XIAO ESP32-S3 Sense: one image, runtime role/id, ESP-NOW flood mesh, flicker-gated flame + haze + mic detectors, USB console
 gateway/                command center: protocol, sim, swarm state, tools, agent loop, dashboard server
 training/               dataset builder, Modal QLoRA + vLLM app, evaluation harness
-config/nodes.json       demo node layout (real + virtual)
+config/nodes*.json      demo node layouts (real + virtual; nodes-single.json for one board)
+site/                   browser flasher (ESP Web Tools) + Web Serial console, served on GitHub Pages
+.github/workflows/      firmware cloud build → merged image → Pages deploy
+docs/                   SETUP_GUIDE (runbook), HARDWARE_BRINGUP (test log + calibration), demo-script
 tests/                  stdlib unittest suite
 ```
 
