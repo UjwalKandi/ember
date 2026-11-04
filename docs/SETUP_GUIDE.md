@@ -192,9 +192,10 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 
 **Camera calibration (only if a flame never shows FLM):**
 1. Point the camera at a plain scene and click **Camera check** (`CAM?`). Then hold the flame 10–15 cm away and click it again.
-2. Each run prints two lines, `swap=0` and `swap=1`, with `warm_px` / `core_px` (flame-coloured pixels) and the resulting `flame=` score. The one marked `<- in use` is active.
-   - If the **other** byte order shows many more flame pixels with the flame in view, send `CAM|swap=1` (or `CAM|swap=0`).
-   - If flame pixels rise but `flame` stays under 40, raise sensitivity: `CAM|gain=60` (default 30; 5–200).
+2. Each run prints two lines, `swap=0` and `swap=1`, with `mean_rgb`, `orange_px` / `core_px` (flame pixels that stand out from the scene) and the resulting `flame=` score. The one marked `<- in use` is active.
+   - **Right byte order:** `mean_rgb` of a normal room looks plausible (e.g. `104,64,57`), not dark green (`11,34,19`). The XIAO default is `swap=1`. Change it with `CAM|swap=0/1` only if the in-use line looks wrong.
+   - **Plain scene:** `flame` should be ~0. **Flame 10–15 cm away:** `orange_px` > 3 and `flame` ≥ 40. If orange pixels appear but `flame` stays under 40, raise sensitivity: `CAM|gain=60` (default 30; 5–200).
+   - A white flashlight should score 0 (it has no orange halo).
    - Settings are saved on the board and survive reboots. `CFG?` shows `cam_swap` and `flame_gain`.
 3. Repeat test 7b.
 

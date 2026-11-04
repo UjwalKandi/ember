@@ -106,9 +106,12 @@ function computeView() {
            ix: px => (px - ox) / s + minx, iy: py => (r.height - oy - py) / s + miny };
 }
 
+let fitted = '';
 function draw() {
   requestAnimationFrame(draw);
   if (!state || !state.nodes.length) return;
+  const box = canvas.getBoundingClientRect(), key = Math.round(box.width) + 'x' + Math.round(box.height);
+  if (key !== fitted) { fitted = key; fit(); }   // panel resized: re-size the backing store
   computeView();
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
@@ -177,7 +180,7 @@ function draw() {
     const x = view.tx(a.location.x), y = view.ty(a.location.y);
     ctx.strokeStyle = css('--accent'); ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x - 9, y - 9); ctx.lineTo(x + 9, y + 9); ctx.moveTo(x + 9, y - 9); ctx.lineTo(x - 9, y + 9); ctx.stroke();
-    ctx.fillStyle = css('--accent'); ctx.font = '600 11px system-ui'; ctx.fillText('EMBER estimate', x + 12, y + 4); ctx.lineWidth = 1;
+    ctx.fillStyle = css('--accent'); ctx.font = '600 11px system-ui'; ctx.fillText('EMBER estimate', x - 40, y + 26); ctx.lineWidth = 1;
   }
 }
 

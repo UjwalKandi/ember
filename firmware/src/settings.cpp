@@ -11,7 +11,7 @@ namespace {
 Preferences prefs;
 Role curRole = NODE;
 uint8_t curId = 0;
-bool curSwap = false;
+bool curSwap = true;
 float curGain = 30.0f;
 
 }  // namespace
@@ -20,7 +20,7 @@ void begin() {
   prefs.begin("ember", true);
   curRole = (Role)prefs.getUChar("role", NODE);
   curId = prefs.getUChar("id", NODE_ID);
-  curSwap = prefs.getBool("cswap", false);
+  curSwap = prefs.getBool("cswap", true);   // measured: XIAO frames need the byte swap
   curGain = prefs.getFloat("fgain", 30.0f);
   prefs.end();
 }
