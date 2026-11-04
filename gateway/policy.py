@@ -348,10 +348,10 @@ def sitrep(swarm: Swarm, a: Dict[str, Any], res: Dict[str, Dict[int, str]],
         "campfire": rng.choice([
             "Send a ranger to verify the fire is attended; keep the node on 10 s sampling.",
             "Low risk for now. Verify on the next patrol and escalate if neighbors pick up haze."]),
-        "sun_glare": "No action. Consider re-aiming the camera or adding a hood to reduce glare.",
+        "sun_glare": "Flicker check enabled on the glare-prone node; consider re-aiming it or adding a hood.",
         "vehicle": "No action. Motion pattern matches a vehicle on the trail.",
-        "sensor_fault": "Schedule maintenance for the faulty node and discount its haze readings.",
-        "weather": "No action. Keep normal sampling; re-assess when the fog lifts.",
+        "sensor_fault": "Haze channel muted on the faulty node; schedule maintenance.",
+        "weather": "Nodes re-baselined for the fog; no crew needed. Re-assess when the fog lifts.",
         "none": "No action required.",
     }[a["cause"]]
     if a["cause"] == "none" and a["unreliable_nodes"]:

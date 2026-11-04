@@ -87,6 +87,7 @@ class CommandCenter:
             self.locked = LockedSim(self.net)
         clock = (lambda: time.monotonic() - self.t0) if self.realtime else (lambda: self.net.t if self.net else 0.0)
         self.swarm = Swarm(nodes, wind, clock=clock, area=self.args.area)
+        self.swarm.airtime_budget_ms = self.args.airtime_budget * 1000
         self.swarm.listeners.append(self._on_packet)
         if self.net:
             self.net.on_rx = self.swarm.on_rx
@@ -276,6 +277,8 @@ def main() -> None:
     ap.add_argument("--settle", type=float, default=40.0)
     ap.add_argument("--show-truth", action="store_true", help="draw simulated fires on the map")
     ap.add_argument("--area", default="Sector A")
+    ap.add_argument("--airtime-budget", type=float, default=36.0,
+                    help="command-center LoRa airtime per hour, seconds (36 = 1%% duty cycle)")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to share the dashboard on the LAN")
     ap.add_argument("--port", type=int, default=8080)
     args = ap.parse_args()
