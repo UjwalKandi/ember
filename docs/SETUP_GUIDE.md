@@ -29,15 +29,19 @@ ls
 ```
 ✅ You see `README.md config docs firmware gateway protocol results tests training`.
 
-### A2. Install the tools
+### A2. Install the tools (use Python 3.12 in a project venv)
+The macOS system Python (3.9) is too old for current Modal releases: pip stops at modal 1.2.6, which fails with `supports the following image builder versions ... You are using '2026.10'`. Use Python 3.12 in a project venv:
 ```bash
-python3 -m pip install --user modal pyserial platformio
-echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc   # macOS system Python; adjust 3.9 to your version
-source ~/.zshrc
+brew install python@3.12            # or the macOS installer from python.org/downloads
+python3.12 -m venv .venv
+source .venv/bin/activate           # do this in every new Terminal window (prompt shows "(.venv)")
+pip install --upgrade pip
+pip install modal pyserial platformio
 modal --version
 pio --version
 ```
-✅ Both print a version (verified with `modal 1.2.6`, `PlatformIO 6.2.0`).
+✅ Both print a version, and modal is newer than 1.2.6. `.venv/` is git-ignored. On macOS, `pip` alone may be "command not found" outside the venv; use `python3 -m pip`.
+- Can't upgrade right now? Fallback: Modal dashboard → **Settings → Image Config** → image builder version `2025.06`.
 
 - A `NotOpenSSLWarning ... LibreSSL` message is harmless (macOS system Python). To hide it:
   `echo 'export PYTHONWARNINGS="ignore::Warning:urllib3"' >> ~/.zshrc && source ~/.zshrc`
@@ -87,7 +91,7 @@ Open **http://localhost:8080**.
 
 ### B1. Hugging Face access
 1. Sign in at https://huggingface.co and open https://huggingface.co/meta-models/Muse-Glimmer-30B.
-2. If there's a license or access form, accept it and wait for approval (the page will say you have access).
+2. If there's a license or access form, accept it and wait for approval (the page will say you have access). As of 2026-11-03 the model is **Apache-2.0 and not gated**: there's no form, and you only need a token.
 3. Create a token: profile picture → **Settings → Access Tokens → Create new token**, type **Read**, name `ember`. Copy it (starts with `hf_`).
 
 ### B2. Modal account
