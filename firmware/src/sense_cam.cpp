@@ -2,6 +2,8 @@
 
 #include <esp_camera.h>
 
+#include <algorithm>
+
 #include "settings.h"
 
 namespace cam {
@@ -37,7 +39,8 @@ constexpr float HAZE_EMA = 0.35f;      // haze is smoothed: real smoke builds ov
 // a lamp's doesn't.
 constexpr float FLAME_LUM_MARGIN = 60.0f;
 constexpr uint32_t MIN_ORANGE_PX = 3;
-constexpr int BURST_FRAMES = 4;
+constexpr int BURST_FRAMES = 5;        // normal sampling
+constexpr int MAX_FRAMES = 8;          // diagnostics
 
 float contrastBaseline = -1.0f;
 float hazeEma = 0.0f;
@@ -106,16 +109,20 @@ FrameStats analyse(const camera_fb_t *fb, bool swap) {
 
 struct Burst {
   FrameStats last;
-  uint32_t px[BURST_FRAMES] = {};
+  uint32_t px[MAX_FRAMES] = {};
   int frames = 0;
-  float flicker = 0;      // (max - min) / mean of the flame area across the burst, %
+  float flicker = 0;      // median frame-to-frame change of the flame area / its mean, %
   uint8_t score = 0;      // 0-100 after the flicker test
   bool steady = false;    // flame-coloured but static: a lamp, flashlight or glare
 };
 
+// Flicker uses the median of consecutive-frame changes, so one odd frame (an auto-exposure
+// step, a hand shake) or a slow brightness drift can't make a lamp look like fire. Measured on
+// a XIAO: lighter ~25%, flashlight / room lamp / empty scene <= 5%.
 Burst burst(int frames, bool swap) {
   Burst b;
-  uint32_t sum = 0, lo = UINT32_MAX, hi = 0;
+  frames = min(frames, MAX_FRAMES);
+  uint32_t sum = 0;
   for (int i = 0; i < frames; i++) {
     camera_fb_t *fb = esp_camera_fb_get();   // GRAB_LATEST + 2 buffers: each call is a new frame
     if (!fb) break;
@@ -124,14 +131,19 @@ Burst burst(int frames, bool swap) {
     uint32_t px = flamePx(b.last);
     b.px[b.frames++] = px;
     sum += px;
-    lo = min(lo, px);
-    hi = max(hi, px);
   }
   if (!b.frames || !b.last.n || sum == 0) return b;
   float mean = (float)sum / b.frames;
-  b.flicker = 100.0f * (hi - lo) / mean;
+  if (b.frames > 2) {
+    uint32_t d[MAX_FRAMES - 1];
+    int nd = b.frames - 1;
+    for (int i = 0; i < nd; i++) d[i] = b.px[i + 1] > b.px[i] ? b.px[i + 1] - b.px[i] : b.px[i] - b.px[i + 1];
+    std::sort(d, d + nd);
+    float median = nd % 2 ? d[nd / 2] : 0.5f * (d[nd / 2 - 1] + d[nd / 2]);
+    b.flicker = 100.0f * median / mean;
+  }
   b.score = clamp100(100.0f * mean / b.last.n * flameGain);
-  if (flickPct && b.frames > 1 && b.flicker < flickPct) {
+  if (flickPct && b.frames > 2 && b.flicker < flickPct) {
     b.steady = true;
     b.score = 0;
   }

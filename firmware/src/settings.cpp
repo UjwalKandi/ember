@@ -23,7 +23,7 @@ void begin() {
   curId = prefs.getUChar("id", NODE_ID);
   curSwap = prefs.getBool("cswap", true);   // measured: XIAO frames need the byte swap
   curGain = prefs.getFloat("fgain", 30.0f);
-  curFlick = prefs.getUChar("flick", 15);
+  curFlick = prefs.getUChar("flick2", 15);   // v2 metric (median change); old "flick" ignored
   prefs.end();
 }
 
@@ -38,7 +38,7 @@ void setCam(bool swap, float gain, uint8_t flick) {
   prefs.begin("ember", false);
   prefs.putBool("cswap", swap);
   prefs.putFloat("fgain", gain);
-  prefs.putUChar("flick", flick);
+  prefs.putUChar("flick2", flick);
   prefs.end();
   curSwap = swap;
   curGain = gain;
