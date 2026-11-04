@@ -1,9 +1,9 @@
 # EMBER firmware
 
-One PlatformIO project for the XIAO ESP32-S3 Sense with two roles:
+One firmware image for the XIAO ESP32-S3 Sense. Every board runs the same image; its **role** and **node id** are settings saved in flash and set over USB serial:
 
-- **node**: camera + PDM microphone, on-device flame/smoke/crackle/motion detection, sends compact ELP packets (`protocol/SPEC.md`) and answers commands.
-- **gateway**: plugged into the laptop over USB; bridges the mesh to serial (`RX|src|hops|rssi|body` / `TX|body`).
+- **node** (`CFG|id=<1-254>`): camera + PDM microphone, on-device flame/smoke/crackle/motion detection, sends compact ELP packets (`protocol/SPEC.md`) and answers commands. When plugged into a laptop it also **bridges itself**: it prints its own packets and everything it hears on the mesh as `RX|...` lines and accepts `TX|...`, so **a single node works with the command center without a gateway**.
+- **gateway** (`CFG|role=gateway`): no sensors; bridges the mesh to the laptop over USB (`RX|src|hops|rssi|body` / `TX|body`).
 
 Transport is ESP-NOW broadcast on channel 1 with Meshtastic-style managed flooding: ≤200 B bodies, TTL 3, a dedupe ring keyed on `(src, pkt_id)`, and 5-40 ms random relay jitter. Every node relays, so a node out of gateway range still gets through via its neighbours.
 
@@ -11,42 +11,49 @@ Transport is ESP-NOW broadcast on channel 1 with Meshtastic-style managed floodi
 
 | file | purpose |
 |---|---|
-| `src/main.cpp` | picks the role at compile time |
+| `src/main.cpp` | picks the role at boot from the stored setting |
+| `src/settings.{h,cpp}` | role + node id in flash (NVS); USB console commands `CFG?`, `CFG|id=N`, `CFG|role=…`, `TEST`, `REBOOT` |
+| `src/selftest.{h,cpp}` | `TEST`: chip, PSRAM, mesh, camera and mic check, ends with `LOG|selftest PASS` |
 | `src/mesh.{h,cpp}` | ESP-NOW flood mesh (frame header, TTL/hops, dedupe, jittered relays, RSSI) |
 | `src/sense_cam.{h,cpp}` | QQVGA RGB565 frames → flame ratio, haze (contrast loss vs slow baseline), motion |
 | `src/sense_mic.{h,cpp}` | 16 kHz PDM mic → sound level and crackle transient rate |
 | `src/node.cpp` | 1 Hz detection state machine (simulator-matched thresholds, debounce), heartbeats, PING/CONFIRM/SET/ALERT |
 | `src/gateway.cpp` | mesh ↔ USB serial bridge |
+| `src/node.cpp` USB bridge | own packets → `RX|<id>|0|0|…`, heard frames → `RX|…`, `TX|…` handled locally + flooded |
 | `src/config.h` | node id default, channel, TTL, LED pin, optional battery ADC |
 
 ## Flashing
 
-Requires PlatformIO (`pipx install platformio` or the VS Code extension). The project uses the pioarduino platform (Arduino-ESP32 3.x); the first build downloads it.
+### From the browser (recommended, nothing to install)
+GitHub Actions builds the firmware on every push (`.github/workflows/firmware.yml`) and publishes a flasher page:
 
+1. Open **https://ujwalkandi.in/ember/** in **Chrome or Edge** (Safari/Firefox can't access USB).
+2. Plug in the board with a USB-C data cable → **Install EMBER firmware** → pick the port → **Install**.
+3. Open the **serial console** page (linked from the flasher), **Connect**, then provision:
+   - node: `CFG|id=1` (unique per board, matching `config/nodes.json`)
+   - gateway: `CFG|role=gateway`
+   The board reboots with its new identity. `CFG?` prints the current settings.
+4. Click **Self-test** (`TEST`) → expect `LOG|selftest PASS`.
+
+The firmware image is also attached to every Actions run as the `ember-firmware` artifact (`ember-factory.bin`, flash at offset `0x0`), usable with any esptool-based flasher.
+
+### Locally with PlatformIO (alternative)
 ```bash
 cd firmware
-
-# gateway (one board, stays plugged into the laptop)
-pio run -e gateway -t upload
-
-# nodes: give every board a unique id 1-254
-PLATFORMIO_BUILD_FLAGS=-DNODE_ID=1 pio run -e node -t upload
-PLATFORMIO_BUILD_FLAGS=-DNODE_ID=2 pio run -e node -t upload
-PLATFORMIO_BUILD_FLAGS=-DNODE_ID=3 pio run -e node -t upload
+pio run -e ember -t upload         # same image for every board
+pio device monitor -e ember        # then type CFG|id=1 or CFG|role=gateway
 ```
 
-If the upload port isn't found, hold **BOOT**, tap **RESET**, release BOOT, and retry. Add `--upload-port /dev/cu.usbmodemXXXX` when several boards are connected.
-
-Node ids must match `config/nodes.json` so the command center knows where each node sits.
+If the upload port isn't found, hold **BOOT**, tap **RESET**, release BOOT, and retry. Choosing "erase device" during a browser install wipes the saved id; provision again.
 
 Optional battery reporting: wire a 2×100 kΩ divider from BAT+ to a free ADC pin and add `-DBATT_ADC_PIN=A0` to the build flags. Without it, nodes leave the `b` token out of heartbeats and PONGs.
 
 ## Test procedure
 
-1. **Gateway boot.** `pio device monitor -e gateway` should print
-   `LOG|EMBER gateway v1 mac=.. ch=1 mesh=ok`.
+1. **Gateway boot.** In the console (or `pio device monitor -e ember`) the gateway prints
+   `LOG|EMBER v2-xxxxxxx role=gateway mac=.. ch=1 mesh=ok`.
 2. **Heartbeats.** Power a node (USB power bank is fine). Within a few seconds the gateway prints
-   `RX|1|0|-48|H|n1|s1|up2|hz0|snd12`. A node's own monitor shows `EMBER node n1 mesh=1 cam=1 mic=1`, followed by its `TX ...` lines.
+   `RX|1|0|-48|H|n1|s1|up2|hz0|snd12`. A node's own console shows `LOG|EMBER v2-xxxxxxx role=node id=1 ... mesh=ok cam=ok mic=ok`, followed by its own packets as `RX|1|0|0|...` lines.
 3. **Commands.** Type into the gateway monitor:
    `TX|C|n1|q1|PING` → `RX|1|0|..|R|n1|q1|PONG`
    `TX|C|n1|q2|CONFIRM` → about 3 s later `R|n1|q2|CONF|OK|c0|hz..|snd..`
@@ -76,7 +83,7 @@ Tuning constants sit at the top of `sense_cam.cpp` (`FLAME_GAIN`, `HAZE_GAIN`, `
 
 The fine-tuned model learned what "normal" looks like from the simulator: quiet-scene heartbeats carry **hz ≈ 3-10** and **snd ≈ 3-10**. Real nodes need to report in the same range.
 
-1. **Baseline.** Put the nodes where they'll sit for the demo, keep the room quiet and the lighting steady, and watch about 2 minutes of heartbeats: `pio device monitor -e gateway`. Ignore the first ~10 s, while the camera warms up and its exposure settles.
+1. **Baseline.** Put the nodes where they'll sit for the demo, keep the room quiet and the lighting steady, and watch about 2 minutes of heartbeats in the serial console. Ignore the first ~10 s, while the camera warms up and its exposure settles.
 2. **Haze off?** If `hz` stays above ~10 with nothing in view, lower `HAZE_GAIN` in `sense_cam.cpp`. If it never moves when you breathe on the lens or hold paper in front of it, raise it.
 3. **Sound off?** `snd = (dBFS + 60) * 2`. If a quiet room reads above ~10, change the `+ 60.0f` offset in `sense_mic.cpp` to something smaller (e.g. `+ 50.0f`). If talking at 1 m doesn't reach ~30-50, make it larger.
 4. **Flame.** Hold a lighter 20-50 cm from the camera: expect `E|n..|FLM|c40+`, and a `CONFIRM` sent from the gateway monitor should come back `CONF|FLM`. If `c` stays low, raise `FLAME_GAIN`. If it never fires at all, swap the RGB565 byte order in `cam::sample()`.

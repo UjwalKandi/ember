@@ -8,7 +8,7 @@ Every phase ends with a ✅ checklist. Don't move on until it passes.
 |---|---|---|---|
 | [A](#phase-a-laptop-setup) | Laptop setup | ~20 min | — |
 | [B](#phase-b-accounts-secrets-model-download) | Accounts, secrets, 60 GB model download | ~15 min + download | C |
-| [C](#phase-c-hardware) | Flash and calibrate the XIAO boards | ~1.5–2 h | B, D |
+| [C](#phase-c-hardware) | Browser-flash + bring up ONE board, then replicate | ~1.5–2 h | B, D |
 | [D](#phase-d-training) | Fine-tune Muse Glimmer on Modal | ~2–3 h (mostly waiting) | C |
 | [E](#phase-e-serve--evaluate) | Serve + evaluate base vs fine-tuned | ~1 h | — |
 | [F](#phase-f-demo-prep) | Demo rehearsal | ~1–2 h | — |
@@ -139,66 +139,92 @@ modal run training/modal_app.py::download
 
 ## Phase C: Hardware
 
-**Needs:** ≥4 XIAO ESP32-S3 Sense boards (1 gateway + 3 nodes), USB-C data cables, a USB power bank per field node.
+**Approach:** no Arduino IDE and nothing to install. GitHub Actions compiles the firmware (`.github/workflows/firmware.yml`), and you flash it from the browser. Every board runs the **same image**, and you give each one its identity over USB afterwards. **Bring up ONE board completely first (C1), and only then replicate (C2).**
 
-### C1. Assemble
-For each board:
-1. Clip on the Sense expansion board (camera + mic).
-2. Attach the **U.FL antenna**. Without it the range is a few metres.
-3. Put a sticky label on each board: `GW`, `1`, `2`, `3`.
+**Needs:**
+- XIAO ESP32-S3 Sense boards
+- USB-C **data** cables (charge-only cables don't show up as a port)
+- **Chrome or Edge** (Safari and Firefox can't access USB)
+- later, a USB power bank per field node
 
-### C2. Flash the gateway
-Plug in only the `GW` board:
-```bash
-cd firmware
-pio run -e gateway -t upload        # first build downloads the ESP32 toolchain (several minutes)
-ls /dev/cu.usbmodem*                # note this port, e.g. /dev/cu.usbmodem1101
-```
-- Upload can't find the board: hold **BOOT**, tap **RESET**, release BOOT, and retry.
-- Compile errors: this firmware was written without a compiler available. Copy the full error for a fix.
+**Links:**
+- Flasher: **https://ujwalkandi.in/ember/** (always use `https://`)
+- Serial console: **https://ujwalkandi.in/ember/console.html**
+- Firmware build status: https://github.com/UjwalKandi/ember/actions (must be green ✅)
 
-### C3. Flash the nodes (each with its own id)
-Unplug GW, plug in board `1`:
-```bash
-PLATFORMIO_BUILD_FLAGS=-DNODE_ID=1 pio run -e node -t upload
-```
-Repeat with board `2` / `NODE_ID=2` and board `3` / `NODE_ID=3`. Ids must match the `"real": true` entries in `config/nodes.json`.
+### C1. Single-board bring-up (board #1)
 
-### C4. Bring-up
-Plug GW back into the laptop and power nodes 1–3 from power banks.
-```bash
-pio device monitor -e gateway       # Ctrl+C to quit
-```
-✅ Within 30 s: `RX|1|0|-4x|H|n1|s..|up..|hz..|snd..` lines from every node. You can type commands, e.g. `TX|C|n1|q1|PING`, which should get `R|n1|q1|PONG` back.
+**Step 1: Assemble one board.** Clip the Sense board (camera + mic) onto the XIAO and attach the U.FL antenna (press straight down until it snaps). Label it `1`.
 
-### C5. Calibrate (details in `firmware/README.md` → "Calibration")
-| Test | Do | Expect |
+**Step 2: Flash it.**
+1. Plug the board into the laptop.
+2. Open the flasher page in Chrome/Edge → **Install EMBER firmware**.
+3. Pick the port (`USB JTAG/serial debug unit` or `cu.usbmodem…`) → **Install**. Erasing is fine on the first install.
+4. ✅ "Installation complete".
+
+If the port is missing or it can't connect: try another cable or USB port. Or hold **B** (BOOT), tap **R** (RESET), release B, and click Install again.
+
+**Step 3: Open the console.**
+1. Open the console page → **Connect** → pick the same port.
+2. ✅ You see `LOG|cfg role=node id=0 fw=v2-…` and, every 5 s, `LOG|unprovisioned: send CFG|id=<1-254>`.
+
+**Step 4: Give it an id.** Type `1` in the id box → **Set node id** (sends `CFG|id=1`). The board reboots.
+1. Click **Connect** again if the console disconnected.
+2. ✅ `LOG|EMBER v2-… role=node id=1 mac=… mesh=ok cam=ok mic=ok`
+
+**Step 5: Self-test.** Click **Self-test**.
+- ✅ `psram=… (ok)`, `mesh=ok`, `cam=ok` with 4 sample lines, `mic=ok` with a level line, then a green `LOG|selftest PASS`.
+- ❌ `cam=FAIL`: the Sense board isn't seated. Unplug, re-clip it firmly, and retry.
+- ❌ `psram=0`: tell me. The PSRAM setting in `platformio.ini` would need changing.
+
+**Step 6: Heartbeats.** Wait 30 s.
+- ✅ Lines like `RX|1|0|0|H|n1|s2|up35|hz5|snd4`. Read it as: own packet (0 hops), haze 5, sound 4.
+
+**Step 7: Detector checks** (watch the console):
+| # | Do | Expect |
 |---|---|---|
-| Quiet baseline | Leave nodes still in a quiet room for 2 min | `hz` and `snd` in heartbeats around 3–10 (the simulator's range). If not, adjust `HAZE_GAIN` / the dBFS offset per the README and re-flash |
-| Flame | Hold a lighter ~30 cm from node 2's camera | `E|n2|...|FLM|c40+` |
-| Glare | Shine a phone flashlight steadily, then send `TX|C|n2|q2|CONFIRM` | The reply is **not** `CONF|FLM` |
-| Fog / rebase | Breathe on or diffuse the lens until `SMK` appears, then send `TX|C|*|q3|SET|rebase1` | Node returns to `OK` |
-| Relay | Carry node 3 out of the gateway's range, with node 1 or 2 between them | Node 3 packets arrive with hops `1` (`RX|3|1|...`) |
+| a | Leave it still in a quiet room for 2 min | `hz` and `snd` in the `H|` lines stay around **3–10**. Note the typical values |
+| b | Hold a lighter flame ~30 cm in front of the camera | `RX|1|0|0|E|n1|…|FLM|c40…` (yellow line) |
+| c | Hold a phone flashlight **steady** at the camera → **Re-sample (CONFIRM)** | `R|n1|q…|CONF|…`, and the code is **not** `FLM` |
+| d | Lighter again → **Re-sample (CONFIRM)** | `CONF|FLM|c40+` (real flames flicker, so they pass) |
+| e | Breathe on the lens / cover it with tissue until `SMK` appears → **Rebase haze** | `R|n1|…|ACK`, then the node returns to `OK` |
+| f | **Ping self** | `R|n1|q…|PONG` |
 
-- Flame never registers: swap the RGB565 byte order in `sense_cam.cpp` (see README).
+**Step 8: Command center with the single board.**
+1. **Close the console tab** (only one program can hold the port).
+2. Find the port and start the dashboard:
+   ```bash
+   ls /dev/cu.usbmodem*
+   python -m gateway.server --serial /dev/cu.usbmodemXXXX --nodes config/nodes-single.json --sim quiet --auto
+   ```
+3. Open http://localhost:8080:
+   - ✅ **n1** is your real board; n2–n6 are simulated.
+   - ✅ Hold the lighter in front of the board. n1 turns red and an assessment starts by itself.
+   - ✅ The trace shows `→ request_confirm({"node_id": 1})` and a reply `R|n1|…|CONF|FLM…`. That CONFIRM was executed by your board.
+4. Stop with **Ctrl+C**.
 
-### C6. Layout
-Place the three nodes where they'll be during the demo, measure or pace their positions in metres, and edit `x`/`y` for ids 1–3 in `config/nodes.json`.
+**✅ C1 success gate:** all of steps 4–8 pass. Send the results (especially the 7a numbers). Fix anything that fails **before** flashing more boards.
 
-### C7. Live test (real + simulated nodes together)
-```bash
-cd ..        # back to the repo root
-python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet --auto
-```
-✅ Nodes 1–3 on the map are the real boards; 4–9 are simulated. A lighter in front of a real node triggers an assessment, and its CONFIRM goes over the radio to that board.
+### C2. Replicate (only after C1 passes)
+
+1. **More nodes:** for each new board, assemble → **Install** → console → `CFG|id=2`, then `3`, … → **Self-test** PASS. Label each board with its id.
+2. **Gateway (optional with a single laptop-connected node):** flash one more board the same way and click **Make gateway** (`CFG|role=gateway`). ✅ `LOG|EMBER v2-… role=gateway … mesh=ok`. Its self-test only requires `mesh=ok`.
+3. **Radio test:** keep the gateway (or node 1) on USB in the console, and power the other nodes from power banks.
+   - ✅ `RX|2|0|-5x|H|n2|…` and `RX|3|0|…` lines arrive over the air, with real RSSI values.
+   - Type `TX|C|n2|q9|PING` → ✅ `R|n2|q9|PONG` comes back over the radio.
+4. **Relay test:** carry node 3 away until its lines stop, then place node 2 halfway. ✅ Node 3 comes back with hops 1: `RX|3|1|…`.
+5. **Layout:** measure the demo positions in metres and edit `x`/`y` for the real ids in `config/nodes.json`.
+6. **Live test:**
+   ```bash
+   python -m gateway.server --serial /dev/cu.usbmodemXXXX --nodes config/nodes.json --sim quiet --auto
+   ```
+   Use the port of whichever board is on USB, gateway or node.
 
 ### ✅ Phase C checklist
-- [ ] gateway + 3 nodes flashed, heartbeats visible
-- [ ] calibration tests pass
+- [ ] C1 gate passed on board 1 (self-test PASS, detectors behave, dashboard runs an assessment with the real board)
+- [ ] remaining boards flashed and provisioned with unique ids
+- [ ] radio + relay tests pass
 - [ ] `config/nodes.json` positions updated
-- [ ] live dashboard shows the real nodes
-
----
 
 ## Phase D: Training
 
@@ -304,11 +330,7 @@ Run the `curl .../v1/models` warm-up from E2 and keep the dashboard open.
 
 ## Phase G: Submission
 
-1. Create the public repo and push:
-   ```bash
-   gh auth login                 # once
-   gh repo create ember --public --source . --push
-   ```
+1. The repo is already public at **https://github.com/UjwalKandi/ember** (created 2026-11-04). Push your latest work: `git push`. New device: `git clone https://github.com/UjwalKandi/ember`.
 2. Check the README: results filled in, "Built during the hackathon" section, cookbook attribution, demo video link.
 3. Submit on the hackathon page: repo link, video, and a one-paragraph pitch ("Existing wildfire networks detect. EMBER investigates, and re-programs its own sensors while doing it.").
 
@@ -327,6 +349,11 @@ Run the `curl .../v1/models` warm-up from E2 and keep the dashboard open.
 | vLLM: tool calls come back as plain text | The `muse_glimmer` tool parser is missing; check `_vllm()` flags. The agent also falls back to its own ATEM parser |
 | Generation never stops | Never stop on `<|eom|>`; leave the checkpoint's generation config alone (`--generation-config auto`) |
 | Every real node shows as unreliable | Battery token issue; nodes without a divider must omit `b` (fixed in firmware; re-flash) |
+| Flasher: no port in the list | Charge-only cable, or the board isn't in download mode: hold B, tap R, release B. Use Chrome/Edge |
+| Flasher page says the browser can't flash | You're in Safari/Firefox, or opened `http://` instead of `https://` |
+| Console: "Failed to open serial port" | Another program holds the port (the dashboard, `pio device monitor`, another tab); close it |
+| Board prints `unprovisioned` | Send `CFG|id=<n>` (an erase during install clears the id) |
+| Dashboard: n1 never appears | Wrong `--serial` port, or the console tab is still open |
 | Node stuck in SMK forever | Haze baseline latch; send `TX|C|nX|q1|SET|rebase1`, and re-flash if it recurs |
 
 ---

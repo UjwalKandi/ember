@@ -77,7 +77,8 @@ Full step-by-step runbook (setup, accounts, hardware, training, eval, demo, plus
 # 1. Command center on a fully simulated swarm (no hardware, no GPU)
 python3 -m gateway.server --sim wildfire --auto --show-truth      # http://localhost:8080 (click map to ignite)
 
-# 2. With real nodes: flash firmware (see firmware/README.md), plug in the gateway XIAO
+# 2. With real nodes: flash from the browser at https://ujwalkandi.in/ember/ (Chrome/Edge), set ids in the console,
+#    then plug a gateway or a single node into the laptop (see docs/SETUP_GUIDE.md Phase C)
 pip install pyserial
 python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet --auto
 #    ids marked "real" in config/nodes.json are hardware; the rest are simulated alongside them

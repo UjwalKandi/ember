@@ -72,8 +72,20 @@ token  := key value                 (e.g. s42, c81, hz34, b3.9)
 ### R: response (node → gateway)
 `R|n3|q7|PONG|b3.9`, `R|n3|q7|CONF|FLM|c88|hz40|snd20`, `R|n3|q7|ACK`
 
-## 3. Gateway ↔ laptop (USB serial, 115200, newline-terminated)
+## 3. Board ↔ laptop (USB serial, 115200, newline-terminated)
 
-- gateway → laptop: `RX|<src>|<hops>|<rssi>|<body>` for every received frame
-- laptop → gateway: `TX|<body>`: the gateway floods it as src 0
-- gateway → laptop: `LOG|<text>` for diagnostics (ignored by the parser)
+Any board plugged into the laptop speaks this, whether it's a gateway or a node.
+
+- board → laptop: `RX|<src>|<hops>|<rssi>|<body>` for every frame received from the mesh. A **node** also prints its own packets as `RX|<own id>|0|0|<body>`, so a single node works as its own gateway.
+- laptop → board: `TX|<body>`. A gateway floods it as src 0. A node handles it locally if it is addressed to itself or `*`, and floods it otherwise.
+- board → laptop: `LOG|<text>` for diagnostics (ignored by the parser)
+
+Console commands (every role; one image for every board, settings stored in flash):
+
+| line | effect |
+|---|---|
+| `CFG?` | prints `LOG|cfg role=<node/gateway> id=<n> fw=<version>` |
+| `CFG|id=<1-254>` | saves the node id and reboots (a node with id 0 stays idle until provisioned) |
+| `CFG|role=gateway` / `CFG|role=node` | saves the role and reboots |
+| `TEST` | hardware self-test; ends with `LOG|selftest PASS` or `LOG|selftest FAIL: <parts>` |
+| `REBOOT` | restarts the board |
