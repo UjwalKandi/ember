@@ -15,5 +15,9 @@ Reading sample();
 // Adopt the current scene contrast as the haze baseline (gateway `SET|rebase1`), so the
 // present ambient haze (fog, dust) reads ~0 from now on.
 void rebase();
+// Runtime calibration (persisted by settings, set over USB: CAM|swap=1, CAM|gain=40).
+void configure(bool swapBytes, float flameGain);
+// Print LOG|cam diagnostics for one frame (colour stats, flame pixels, both byte orders).
+void diag();
 
 }  // namespace cam

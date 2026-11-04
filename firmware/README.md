@@ -34,6 +34,7 @@ GitHub Actions builds the firmware on every push (`.github/workflows/firmware.ym
    - gateway: `CFG|role=gateway`
    The board reboots with its new identity. `CFG?` prints the current settings.
 4. Click **Self-test** (`TEST`) → expect `LOG|selftest PASS`.
+5. Flame not detected? `CAM?` prints camera colour statistics for both RGB565 byte orders. Fix with `CAM|swap=0/1` and `CAM|gain=<5-200>` (default 30), which are saved in flash. No reflash needed.
 
 The firmware image is also attached to every Actions run as the `ember-firmware` artifact (`ember-factory.bin`, flash at offset `0x0`), usable with any esptool-based flasher.
 

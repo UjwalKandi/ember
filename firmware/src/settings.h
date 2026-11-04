@@ -11,16 +11,19 @@ void begin();
 Role role();
 uint8_t nodeId();          // 0 = unprovisioned (nodes stay idle until given an id)
 const char *roleName();
+bool camSwap();            // RGB565 byte order (CAM|swap=1)
+float flameGain();         // flame sensitivity (CAM|gain=N, default 30)
 
 // Persist and reboot.
 void setRole(Role r);
 void setId(uint8_t id);
+void setCam(bool swap, float gain);   // persists and applies immediately (no reboot)
 
 }  // namespace settings
 
 // Shared USB serial console: line reader plus the commands every role understands
-// (CFG?, CFG|id=N, CFG|role=node|gateway, TEST, REBOOT). Role-specific lines (TX|...)
-// are handed back to the caller.
+// (CFG?, CFG|id=N, CFG|role=node|gateway, TEST, REBOOT, CAM?, CAM|swap=0/1, CAM|gain=N).
+// Role-specific lines (TX|...) are handed back to the caller.
 namespace console {
 
 using TestFn = void (*)();

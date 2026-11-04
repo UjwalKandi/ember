@@ -50,6 +50,7 @@
   <h1><span>EMBER</span> · swarm command center</h1>
   <span class="pill" id="mode">connecting…</span>
   <span class="pill" id="agentpill"></span>
+  <span class="pill" id="hw" style="display:none" title="Real boards: time since their last packet (heartbeats every 30 s)"></span>
   <span class="pill" id="airtime" title="LoRa channel time spent by the command center this hour vs the 1% duty-cycle budget"></span>
   <span class="spacer"></span>
   <select id="scenario"></select>
@@ -142,8 +143,15 @@ function draw() {
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
   }
   // nodes
+  const real = new Set(state.real_ids || []);
   for (const n of state.nodes) {
     const silent = n.age === null || n.age > 90;
+    if (real.has(n.id)) {   // real hardware: white ring, LIVE/OFFLINE tag
+      ctx.strokeStyle = silent ? css('--flm') : '#ffffff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(view.tx(n.x), view.ty(n.y), 15, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = silent ? css('--flm') : css('--ok'); ctx.font = '700 10px system-ui';
+      ctx.fillText(silent ? 'OFFLINE' : 'LIVE · seen ' + Math.round(n.age) + 's', view.tx(n.x) - 30, view.ty(n.y) - 20);
+    }
     const c = silent ? css('--off') : css(COLORS[n.code] || '--ok');
     const x = view.tx(n.x), y = view.ty(n.y);
     ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
@@ -240,6 +248,17 @@ function applyState(s) {
   $('mode').className = 'pill live';
   $('agentpill').textContent = s.agent === 'llm' ? 'agent: Muse Glimmer' : 'agent: heuristic baseline';
   $('busy').style.display = s.busy ? '' : 'none';
+  const realIds = s.real_ids || [];
+  if (realIds.length) {
+    const parts = realIds.map(id => {
+      const n = s.nodes.find(n => n.id === id);
+      return n && n.age !== null ? `n${id} ${Math.round(n.age)}s` : `n${id} never`;
+    });
+    const stale = realIds.some(id => { const n = s.nodes.find(n => n.id === id); return !n || n.age === null || n.age > 90; });
+    $('hw').style.display = '';
+    $('hw').textContent = 'hardware: ' + parts.join(', ');
+    $('hw').style.color = stale ? 'var(--flm)' : 'var(--ok)';
+  }
   if (s.airtime) {
     const frac = s.airtime.used_s / s.airtime.budget_s;
     $('airtime').textContent = `airtime ${s.airtime.used_s.toFixed(1)} / ${s.airtime.budget_s}s per hour`;

@@ -180,15 +180,27 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 **Step 6: Heartbeats.** Wait 30 s.
 - ✅ Lines like `RX|1|0|0|H|n1|s2|up35|hz5|snd4`. Read it as: own packet (0 hops), haze 5, sound 4.
 
-**Step 7: Detector checks** (watch the console):
+**Step 7: Detector checks** (watch the console). Click **Reset tuning** first. The dashboard's agent can leave a board with "haze muted" / "flicker-check" from earlier tests; the dashboard also resets this automatically whenever it starts or loads a scenario.
 | # | Do | Expect |
 |---|---|---|
 | a | Leave it still in a quiet room for 2 min | `hz` and `snd` in the `H|` lines stay around **3–10**. Note the typical values |
-| b | Hold a lighter flame ~30 cm in front of the camera | `RX|1|0|0|E|n1|…|FLM|c40…` (yellow line) |
+| b | Hold a lighter flame **10–15 cm** from the camera so it fills a visible part of the image (a fire video full-screen on a phone also works) | `RX|1|0|0|E|n1|…|FLM|c40…` (yellow line). Still no FLM? See **Camera calibration** below |
 | c | Hold a phone flashlight **steady** at the camera → **Re-sample (CONFIRM)** | `R|n1|q…|CONF|…`, and the code is **not** `FLM` |
 | d | Lighter again → **Re-sample (CONFIRM)** | `CONF|FLM|c40+` (real flames flicker, so they pass) |
 | e | Breathe on the lens / cover it with tissue until `SMK` appears → **Rebase haze** | `R|n1|…|ACK`, then the node returns to `OK` |
 | f | **Ping self** | `R|n1|q…|PONG` |
+
+**Camera calibration (only if a flame never shows FLM):**
+1. Point the camera at a plain scene and click **Camera check** (`CAM?`). Then hold the flame 10–15 cm away and click it again.
+2. Each run prints two lines, `swap=0` and `swap=1`, with `warm_px` / `core_px` (flame-coloured pixels) and the resulting `flame=` score. The one marked `<- in use` is active.
+   - If the **other** byte order shows many more flame pixels with the flame in view, send `CAM|swap=1` (or `CAM|swap=0`).
+   - If flame pixels rise but `flame` stays under 40, raise sensitivity: `CAM|gain=60` (default 30; 5–200).
+   - Settings are saved on the board and survive reboots. `CFG?` shows `cam_swap` and `flame_gain`.
+3. Repeat test 7b.
+
+**How to tell a node is live:**
+- Console: an `RX|1|0|0|H|n1|…` heartbeat every 30 s; `up` (uptime in seconds) keeps increasing.
+- Dashboard: real boards have a white ring and a green **LIVE · seen Ns** tag (red **OFFLINE** after 90 s of silence), and the header shows `hardware: n1 3s`. In the traffic feed, a real board connected over USB shows `h0 0dBm`; over the radio it shows real RSSI such as `-55dBm`.
 
 **Step 8: Command center with the single board.**
 1. **Close the console tab** (only one program can hold the port).

@@ -3,6 +3,7 @@
 #include <Preferences.h>
 
 #include "config.h"
+#include "sense_cam.h"
 
 namespace settings {
 namespace {
@@ -10,6 +11,8 @@ namespace {
 Preferences prefs;
 Role curRole = NODE;
 uint8_t curId = 0;
+bool curSwap = false;
+float curGain = 30.0f;
 
 }  // namespace
 
@@ -17,12 +20,26 @@ void begin() {
   prefs.begin("ember", true);
   curRole = (Role)prefs.getUChar("role", NODE);
   curId = prefs.getUChar("id", NODE_ID);
+  curSwap = prefs.getBool("cswap", false);
+  curGain = prefs.getFloat("fgain", 30.0f);
   prefs.end();
 }
 
 Role role() { return curRole; }
 uint8_t nodeId() { return curId; }
 const char *roleName() { return curRole == GATEWAY ? "gateway" : "node"; }
+bool camSwap() { return curSwap; }
+float flameGain() { return curGain; }
+
+void setCam(bool swap, float gain) {
+  prefs.begin("ember", false);
+  prefs.putBool("cswap", swap);
+  prefs.putFloat("fgain", gain);
+  prefs.end();
+  curSwap = swap;
+  curGain = gain;
+  cam::configure(swap, gain);
+}
 
 void setRole(Role r) {
   prefs.begin("ember", false);
@@ -48,7 +65,8 @@ char line[256];
 size_t lineLen = 0;
 
 void printConfig() {
-  Serial.printf("LOG|cfg role=%s id=%u fw=%s\n", settings::roleName(), settings::nodeId(), EMBER_FW);
+  Serial.printf("LOG|cfg role=%s id=%u fw=%s cam_swap=%d flame_gain=%.0f\n", settings::roleName(),
+                settings::nodeId(), EMBER_FW, settings::camSwap(), settings::flameGain());
 }
 
 void reboot() {
@@ -77,6 +95,19 @@ bool handleCommon(const char *l) {
     reboot();
   } else if (strncmp(l, "CFG", 3) == 0) {
     Serial.println("LOG|cfg error: use CFG?, CFG|id=<1-254>, CFG|role=node|gateway");
+  } else if (strcmp(l, "CAM?") == 0) {
+    cam::diag();
+  } else if (strncmp(l, "CAM|swap=", 9) == 0) {
+    settings::setCam(atoi(l + 9) == 1, settings::flameGain());
+    printConfig();
+  } else if (strncmp(l, "CAM|gain=", 9) == 0) {
+    float g = atof(l + 9);
+    if (g < 5 || g > 200) {
+      Serial.println("LOG|cam error: gain must be 5-200");
+      return true;
+    }
+    settings::setCam(settings::camSwap(), g);
+    printConfig();
   } else if (strcmp(l, "TEST") == 0) {
     if (testFn) testFn();
   } else if (strcmp(l, "REBOOT") == 0) {

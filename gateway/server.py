@@ -53,12 +53,14 @@ class CommandCenter:
         self.trace: List[Dict[str, Any]] = []
         self.bridge = None
         self.t0 = time.monotonic()
+        self.real_ids: set = set()
         self.reset(args.sim, args.seed)
         if args.serial:
             from .bridge import SerialBridge
             self.bridge = SerialBridge(args.serial, lambda rx: self.swarm.on_rx(rx),
                                        on_log=lambda s: self.publish({"type": "log", "text": s}))
             self.swarm.transports.append(self.bridge)
+            self._reset_hardware()
         threading.Thread(target=self._loop, daemon=True).start()
 
     # --- world setup -------------------------------------------------------
@@ -79,6 +81,7 @@ class CommandCenter:
 
     def reset(self, scenario: Optional[str], seed: int) -> None:
         nodes, virtual, wind = self._layout()
+        self.real_ids = set(nodes) - set(virtual) if self.args.serial else set()
         self.realtime = bool(self.args.serial)
         self.net: Optional[sim.SimNetwork] = None
         self.locked: Optional[LockedSim] = None
@@ -94,9 +97,16 @@ class CommandCenter:
             self.swarm.transports.append(self.locked)
         if self.bridge:
             self.swarm.transports.append(self.bridge)
+            self._reset_hardware()
         self.scenario, self.seed = scenario, seed
         self.last_assess_t, self.pending_auto, self.trace = -1e9, None, []
         self.publish({"type": "reset", "scenario": scenario, "seed": seed})
+
+    def _reset_hardware(self) -> None:
+        """Real boards keep detector tuning (SET smk/flk) in RAM across dashboard restarts and
+        scenario changes; put them back to defaults so every session starts clean."""
+        self.bridge.send(elp.command("*", self.swarm.next_qid(), "SET", smk=25, flk=0))
+        self.publish({"type": "log", "text": "reset detector tuning on real boards (smk25, flk0)"})
 
     def ignite(self, x: float, y: float) -> None:
         if not self.net:
@@ -179,7 +189,7 @@ class CommandCenter:
     def state(self) -> Dict[str, Any]:
         s = self.swarm.snapshot()
         s.update(scenario=self.scenario, auto=self.auto, busy=self.busy.locked(), agent=self.args.agent,
-                 real=bool(self.bridge))
+                 real=bool(self.bridge), real_ids=sorted(self.real_ids))
         if self.net and self.args.show_truth:
             s["fires"] = [{"x": f.center(self.net.t, self.net.wind)[0], "y": f.center(self.net.t, self.net.wind)[1],
                            "r": max(0.0, f.radius(self.net.t, self.net.wind)), "kind": f.kind}

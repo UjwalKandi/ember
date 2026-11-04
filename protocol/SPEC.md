@@ -89,3 +89,5 @@ Console commands (every role; one image for every board, settings stored in flas
 | `CFG|role=gateway` / `CFG|role=node` | saves the role and reboots |
 | `TEST` | hardware self-test; ends with `LOG|selftest PASS` or `LOG|selftest FAIL: <parts>` |
 | `REBOOT` | restarts the board |
+| `CAM?` | camera diagnostics: colour stats and flame pixels for both RGB565 byte orders |
+| `CAM|swap=<0/1>` / `CAM|gain=<5-200>` | camera byte order / flame sensitivity, saved in flash |
