@@ -17,7 +17,13 @@ class SerialBridge:
             import serial  # pyserial
         except ImportError as e:
             raise SystemExit("pyserial is required for hardware mode: pip install pyserial") from e
-        self.ser = serial.Serial(port, baud, timeout=0.5)
+        try:
+            self.ser = serial.Serial(port, baud, timeout=0.5)
+        except serial.SerialException as e:
+            if "busy" in str(e).lower():
+                raise SystemExit(f"\n{port} is busy: another program has it open. Close the EMBER console tab "
+                                 f"(or click Disconnect), quit any `pio device monitor`, then run this again.\n")
+            raise SystemExit(f"\ncould not open {port}: {e}\nCheck the cable and `ls /dev/cu.usbmodem*`.\n")
         self.on_rx, self.on_log = on_rx, on_log or (lambda s: None)
         self._wlock = threading.Lock()
         self._stop = False

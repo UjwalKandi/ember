@@ -24,6 +24,7 @@
 <header>
   <b><span>EMBER</span> console</b>
   <button class="primary" id="connect">Connect</button>
+  <button id="disconnect">Disconnect</button>
   <span class="sep"></span>
   <button data-send="CFG?">Show config</button>
   <input id="id" type="number" min="1" max="254" value="1" style="width:60px">
@@ -49,7 +50,7 @@
 </footer>
 <script>
 const $ = (id) => document.getElementById(id);
-let port = null, writer = null, nodeId = null, q = 100;
+let port = null, writer = null, reader = null, pipeDone = null, nodeId = null, q = 100;
 const enc = new TextEncoder();
 
 function print(text, cls = 'rx') {
@@ -82,8 +83,8 @@ async function send(text) {
 
 async function readLoop() {
   const decoder = new TextDecoderStream();
-  port.readable.pipeTo(decoder.writable).catch(() => {});
-  const reader = decoder.readable.getReader();
+  pipeDone = port.readable.pipeTo(decoder.writable).catch(() => {});
+  reader = decoder.readable.getReader();
   let buf = '';
   try {
     while (true) {
@@ -111,6 +112,19 @@ function setConnected(on) {
   $('connect').textContent = on ? 'Connected' : 'Connect';
   $('connect').disabled = on;
 }
+
+$('disconnect').onclick = async () => {
+  try {
+    if (reader) { await reader.cancel().catch(() => {}); reader = null; }
+    if (pipeDone) { await pipeDone; pipeDone = null; }
+    if (writer) { writer.releaseLock(); writer = null; }
+    if (port) { await port.close(); port = null; }
+    print('disconnected: the port is free for the command center now.', 'sys');
+  } catch (e) {
+    print('disconnect: ' + e.message + '. Closing this tab always frees the port.', 'fail');
+  }
+  setConnected(false);
+};
 
 $('connect').onclick = async () => {
   if (!('serial' in navigator)) { print('This browser has no Web Serial. Use Chrome or Edge.', 'fail'); return; }
