@@ -71,6 +71,8 @@ Regenerate: `python -m training.eval --report results/*.json`
 
 ## Quickstart
 
+Full step-by-step runbook (setup, accounts, hardware, training, eval, demo, plus how to reuse this blueprint): **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**. Demo flow: [docs/demo-script.md](docs/demo-script.md).
+
 ```bash
 # 1. Command center on a fully simulated swarm (no hardware, no GPU)
 python3 -m gateway.server --sim wildfire --auto --show-truth      # http://localhost:8080 (click map to ignite)
