@@ -9,8 +9,8 @@ Every phase ends with a ✅ checklist. Don't move on until it passes.
 | [A](#phase-a-laptop-setup) | Laptop setup | ~20 min | — |
 | [B](#phase-b-accounts-secrets-model-download) | Accounts, secrets, 60 GB model download | ~15 min + download | C |
 | [C](#phase-c-hardware) | Browser-flash + bring up ONE board, then replicate | ~1.5–2 h | B, D |
-| [D](#phase-d-training) | Fine-tune Muse Glimmer on Modal | ~2–3 h (mostly waiting) | C |
-| [E](#phase-e-serve--evaluate) | Serve + evaluate base vs fine-tuned | ~1 h | — |
+| [D](#phase-d-run-muse-glimmer-locally-free) | Run Muse Glimmer locally (llama.cpp) + evaluate | ~1 h + overnight eval | C |
+| [E](#phase-e-fine-tune-for-free-kaggle-and-run-the-adapter-locally) | Free fine-tune on Kaggle, adapter runs locally | ~1 day (mostly waiting) | — |
 | [F](#phase-f-demo-prep) | Demo rehearsal | ~1–2 h | — |
 | [G](#phase-g-submission) | Publish + submit | ~30 min | — |
 
@@ -97,6 +97,8 @@ Open **http://localhost:8080**.
 ---
 
 ## Phase B: Accounts, secrets, model download
+
+> **Free path (2026-11-05):** only the Hugging Face token (B1) is needed. Modal (B2–B4) is optional and paid; see [PROJECT_ASSESSMENT.md](PROJECT_ASSESSMENT.md).
 
 ### B1. Hugging Face access
 1. Sign in at https://huggingface.co and open https://huggingface.co/meta-models/Muse-Glimmer-30B.
@@ -242,7 +244,65 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 - [ ] radio + relay tests pass
 - [ ] `config/nodes.json` positions updated
 
-## Phase D: Training
+## Phase D: Run Muse Glimmer locally (free)
+
+Everything here is free and open source. See [PROJECT_ASSESSMENT.md](PROJECT_ASSESSMENT.md) for why Modal and vLLM were dropped.
+
+### D1. Local model server (llama.cpp, Metal)
+1. Install llama.cpp. You need a recent build; Muse Glimmer support landed in b10355:
+   ```bash
+   brew install llama.cpp        # or: brew upgrade llama.cpp
+   llama-server --version
+   ```
+2. On a 24 GB Mac, let the GPU use more memory (resets on reboot), and quit heavy apps like extra Chrome tabs:
+   ```bash
+   sudo sysctl iogpu.wired_limit_mb=20480
+   ```
+3. Start the server. The first run downloads the ~17 GB GGUF from Hugging Face:
+   ```bash
+   cd ~/Documents/meta/ember
+   scripts/run_local_model.sh
+   ```
+   ✅ The log shows the model loading with layers offloaded to Metal, then `server is listening on http://127.0.0.1:8081`.
+   ❌ Out of memory: close apps and retry, or try `EMBER_QUANT=Q4_K_M scripts/run_local_model.sh`.
+4. Smoke test, in a second terminal:
+   ```bash
+   curl -s http://localhost:8081/v1/models
+   curl -s http://localhost:8081/v1/chat/completions -H 'Content-Type: application/json' \
+     -d '{"model":"muse-glimmer","messages":[{"role":"user","content":"Say hi in 5 words"}],"max_tokens":800,"chat_template_kwargs":{"reasoning_strength":"low"}}'
+   ```
+   ✅ JSON with a short answer in `choices[0].message.content`.
+
+### D2. Muse Glimmer runs the dashboard
+```bash
+cd ~/Documents/meta/ember && source .venv/bin/activate
+export EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_MODEL=muse-glimmer
+export EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}'
+python -m gateway.server --sim fog --agent llm --auto --show-truth
+```
+✅ The header says **agent: Muse Glimmer**. **Assess now** produces real tool calls from the model in the trace panel; each turn takes tens of seconds on a laptop. Add `--serial … --nodes config/nodes.json` to include the real boards.
+
+### D3. Evaluate base Muse Glimmer (overnight-scale)
+```bash
+python -m training.eval --agent llm --url http://localhost:8081/v1 --model muse-glimmer \
+    --limit 2 --workers 1 --name base-local
+python -m training.eval --report results/heuristic.json results/base-local.json results/oracle.json
+```
+`--limit 2` means 2 episodes per scenario (28 total). Put the numbers in the README "Muse Glimmer (base)" column, noting the reduced set.
+
+## Phase E: Fine-tune for free (Kaggle) and run the adapter locally
+
+Full steps: **[training/KAGGLE.md](../training/KAGGLE.md)**. Summary:
+1. `python -m training.gen_data --per-scenario 60 --max-examples 600 --max-events 25 --out data-small`
+2. `python training/kaggle_qlora.py --dry-run --data data-small/train.jsonl` (checks lengths and label masks, no GPU)
+3. Kaggle notebook, GPU T4 x2: run `kaggle_qlora.py` (smoke test with `--max-steps 4`, then the full run), and download `ember-lora/`
+4. `scripts/lora_to_gguf.sh ./ember-lora ember-lora.gguf`, then `scripts/run_local_model.sh --lora ember-lora.gguf`
+5. Same eval command with `--name ember-local`, then `--report … results/ember-local.json`
+
+<details>
+<summary>Optional paid path (Modal H100 + vLLM), not used</summary>
+
+### Modal training
 
 ### D1. Build the training data (local; `data/` is not in git)
 ```bash
@@ -274,14 +334,14 @@ modal run training/modal_app.py::merge
 ```
 ✅ Ends with `merged checkpoint at /runs/ember-qlora/merged`.
 
-### ✅ Phase D checklist
+#### ✅ Modal training checklist
 - [ ] smoke checks 1–4 pass
 - [ ] full training finished
 - [ ] merge finished
 
 ---
 
-## Phase E: Serve & evaluate
+### Modal serving + evaluation
 
 ### E1. Deploy the endpoints
 ```bash
@@ -313,20 +373,23 @@ python3 -m training.eval --report results/heuristic.json results/base.json resul
 ```
 Paste the table into the README "Results" section (base + EMBER columns). Keep the numbers honest, even where EMBER loses.
 
-### ✅ Phase E checklist
+#### ✅ Modal serving checklist
 - [ ] both endpoints answer
 - [ ] base + ember evals saved in `results/`
 - [ ] README table filled in
 
 ---
 
+
+</details>
+
 ## Phase F: Demo prep
 
 ### F1. Point the dashboard at the fine-tuned model
 ```bash
-export EMBER_LLM_URL=https://<ember-url>/v1
-export EMBER_LLM_MODEL=ember
-export EMBER_LLM_KEY=<key>
+export EMBER_LLM_URL=http://localhost:8081/v1       # local llama.cpp (Phase D)
+export EMBER_LLM_MODEL=muse-glimmer
+export EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}'
 python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet \
   --agent llm --auto --show-truth --airtime-budget 120
 ```

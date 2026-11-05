@@ -209,5 +209,57 @@ class AgentLoopTests(unittest.TestCase):
                          [("request_confirm", {"node_id": 3})])
 
 
+class FreePathTests(unittest.TestCase):
+    def test_llm_extra_fields_and_length_retry(self):
+        import io
+        from unittest import mock
+        from gateway.llm import ChatClient
+        sent = []
+        replies = [
+            {"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning_content": "..."}}]},
+            {"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]},
+        ]
+
+        def fake_urlopen(req, timeout):
+            sent.append(json.loads(req.data))
+            return io.BytesIO(json.dumps(replies.pop(0)).encode())
+
+        client = ChatClient("http://x/v1", "muse-glimmer", "k",
+                            extra={"chat_template_kwargs": {"reasoning_strength": "low"}})
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            out = client.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["content"], "ok")
+        self.assertEqual(sent[0]["chat_template_kwargs"], {"reasoning_strength": "low"})
+        self.assertEqual(sent[1]["max_tokens"], 2 * sent[0]["max_tokens"])   # retried with more budget
+
+    def test_context_event_cap(self):
+        ep = make_episode("wildfire", 6)
+        row = trajectory(ep, random.Random(0), max_events=5)
+        events = [l for l in row["messages"][1]["content"].splitlines() if l.startswith("T-")]
+        self.assertLessEqual(len(events), 5)
+
+    def test_kaggle_label_mask_covers_only_assistant_turns(self):
+        from training.kaggle_qlora import build_example
+
+        class CharTok:
+            """Toy tokenizer: one token per character, template = role-tagged lines."""
+            def apply_chat_template(self, msgs, tools=None, tokenize=False):
+                return "".join(f"<{m['role']}>{m.get('content') or json.dumps(m.get('tool_calls'))}\n" for m in msgs)
+
+            def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
+                return {"input_ids": [ord(c) for c in text], "offset_mapping": [(i, i + 1) for i in range(len(text))]}
+
+        row = trajectory(make_episode("fog", 2), random.Random(0))
+        ex = build_example(CharTok(), row, max_len=100_000)
+        text = CharTok().apply_chat_template(row["messages"])
+        trained = "".join(chr(t) for t, l in zip(ex["input_ids"], ex["labels"]) if l != -100)
+        self.assertNotIn("<user>", trained)
+        self.assertNotIn("<system>", trained)
+        self.assertIn("submit_assessment", trained)
+        self.assertIn("EMBER SITREP", trained)
+        self.assertLess(len(trained), len(text))
+        self.assertIsNone(build_example(CharTok(), row, max_len=10))     # too long -> dropped
+
+
 if __name__ == "__main__":
     unittest.main()

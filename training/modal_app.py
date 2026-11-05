@@ -1,4 +1,6 @@
-"""EMBER on Modal: weights download, QLoRA SFT (Axolotl), LoRA merge, and vLLM serving.
+"""OPTIONAL, PAID PATH. EMBER on Modal: weights download, QLoRA SFT (Axolotl), LoRA merge, vLLM serving.
+
+The free path is training/kaggle_qlora.py (Kaggle 2×T4) + scripts/run_local_model.sh (llama.cpp).
 
 Setup (once):
     pip install modal && modal setup

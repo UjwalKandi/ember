@@ -1,8 +1,9 @@
 """Minimal OpenAI-compatible chat client (stdlib only) + Muse Glimmer ATEM fallback parser.
 
-vLLM serves Muse Glimmer with `--enable-auto-tool-choice --tool-call-parser muse_glimmer`,
-which returns structured `tool_calls`. If a server returns raw ATEM blocks in the
-content instead, `parse_atem` recovers the calls (same rules as the cookbook parser).
+Works with llama.cpp `llama-server` (free, local; the default: http://localhost:8081/v1) and
+vLLM (`--tool-call-parser muse_glimmer`). Both return structured `tool_calls`; if a server
+returns raw ATEM blocks in the content instead, `parse_atem` recovers the calls (same rules as
+the cookbook parser).
 """
 from __future__ import annotations
 
@@ -40,28 +41,34 @@ def parse_atem(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 class ChatClient:
     def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None,
-                 api_key: Optional[str] = None, timeout: float = 120.0):
-        self.base_url = (base_url or os.environ.get("EMBER_LLM_URL", "http://localhost:8000/v1")).rstrip("/")
-        self.model = model or os.environ.get("EMBER_LLM_MODEL", "ember")
+                 api_key: Optional[str] = None, timeout: float = 600.0, extra: Optional[dict] = None):
+        self.base_url = (base_url or os.environ.get("EMBER_LLM_URL", "http://localhost:8081/v1")).rstrip("/")
+        self.model = model or os.environ.get("EMBER_LLM_MODEL", "muse-glimmer")
         self.api_key = api_key or os.environ.get("EMBER_LLM_KEY", "EMPTY")
-        self.timeout = timeout
+        self.timeout = timeout   # a 30B model on a laptop can take a while per turn
+        # Extra request fields, e.g. EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}'
+        # for llama.cpp, so Muse Glimmer's reasoning doesn't use up the token budget.
+        self.extra = extra if extra is not None else json.loads(os.environ.get("EMBER_LLM_EXTRA") or "{}")
 
     def chat(self, messages: List[dict], tools: Optional[List[dict]] = None,
-             temperature: float = 0.6, max_tokens: int = 1500) -> Dict[str, Any]:
+             temperature: float = 0.6, max_tokens: int = 3000) -> Dict[str, Any]:
         """Returns {"content": str, "tool_calls": [...], "reasoning": str|None}.
-        Muse Glimmer should not be run greedy; always send temperature, top_p and top_k together."""
+        Muse Glimmer should not be run greedy; always send temperature, top_p and top_k together.
+        Reasoning tokens count toward max_tokens, hence the generous default."""
         body: Dict[str, Any] = {"model": self.model, "messages": _wire(messages),
                                 "temperature": temperature, "top_p": 0.95, "top_k": 64,
-                                "max_tokens": max_tokens}
+                                "max_tokens": max_tokens, **self.extra}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions", data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            data = json.loads(r.read())
-        msg = data["choices"][0]["message"]
+        data = self._post(body)
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length" and not (choice["message"].get("content")
+                                                           or choice["message"].get("tool_calls")):
+            # all tokens went to reasoning; retry once with double the budget
+            data = self._post({**body, "max_tokens": max_tokens * 2})
+            choice = data["choices"][0]
+        msg = choice["message"]
         content = msg.get("content") or ""
         calls = []
         for c in msg.get("tool_calls") or []:
@@ -77,6 +84,13 @@ class ChatClient:
             content, calls = parse_atem(content)
         return {"content": content, "tool_calls": calls,
                 "reasoning": msg.get("reasoning_content") or msg.get("reasoning")}
+
+    def _post(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions", data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            return json.loads(r.read())
 
 
 def _wire(messages: List[dict]) -> List[dict]:

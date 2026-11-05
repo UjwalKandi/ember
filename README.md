@@ -47,8 +47,8 @@ EMBER is an **agentic sensor mesh**. Cheap XIAO ESP32-S3 Sense nodes (camera + m
 | simulate | 14 scenarios (wildfire variants, campfire, sun glare, vehicle, dusty road, fog, fire-in-fog, stuck sensor, dying node, …) on random node grids with wind, packet loss and multi-hop | `gateway/sim.py` |
 | label | ground truth from the simulator; airtime-priced, value-of-information tool-use skeleton from an observation-only policy; edge re-programming actions | `training/gen_data.py` |
 | format | OpenAI `messages`, one tool call per assistant message (Muse Glimmer's format), arguments as dicts, + tool schemas; ~2.4k trajectories | `data/*.jsonl` |
-| train | Axolotl QLoRA on 1×H100 (Modal): cookbook hyperparameters on Axolotl's text-only tool-calling path, 8k context | `training/modal_app.py` |
-| serve | merged checkpoint on the `vllm/vllm-openai:muse-glimmer` image, `muse_glimmer` tool + reasoning parsers | `training/modal_app.py` |
+| train | QLoRA (cookbook hyperparameters, assistant-only loss) on Kaggle's free 2×T4; optional paid path: Axolotl on Modal H100 | `training/kaggle_qlora.py`, `training/modal_app.py` |
+| serve | llama.cpp on the laptop (Muse Glimmer GGUF + LoRA adapter GGUF, upstream ATEM tool parser); optional: vLLM | `scripts/run_local_model.sh`, `scripts/lora_to_gguf.sh` |
 | evaluate | 420 held-out episodes: verdict/cause accuracy, false alarms, misses, localization, node-health F1, accuracy under tight airtime, false-alarm events in the 5 min after acting (vs a no-action replay of the same seed) | `training/eval.py` |
 
 ### Results (held-out, 420 episodes; 1/3 under tight or exhausted airtime budgets)
@@ -83,14 +83,13 @@ pip install pyserial
 python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet --auto
 #    ids marked "real" in config/nodes.json are hardware; the rest are simulated alongside them
 
-# 3. Use Muse Glimmer instead of the rule-based baseline
-export EMBER_LLM_URL=https://<workspace>--ember-serve-ember.modal.run/v1 EMBER_LLM_MODEL=ember EMBER_LLM_KEY=...
-python3 -m gateway.server --sim fog --agent llm
+# 3. Use Muse Glimmer instead of the rule-based baseline (free, local llama.cpp on Apple silicon)
+scripts/run_local_model.sh                                        # serves the 17 GB GGUF on :8081
+EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}' \
+  python3 -m gateway.server --sim fog --agent llm
 
-# 4. Train / serve / evaluate (see training/modal_app.py docstring for the full pipeline)
-python3 -m training.gen_data --out data
-modal run training/modal_app.py::download && modal run training/modal_app.py::train
-python3 -m training.eval --agent llm --url $EMBER_LLM_URL --model ember --key $EMBER_LLM_KEY
+# 4. Evaluate, and fine-tune for free on Kaggle (training/KAGGLE.md)
+python3 -m training.eval --agent llm --url http://localhost:8081/v1 --model muse-glimmer --limit 2 --workers 1 --name base-local
 
 # tests
 python3 -m unittest discover -s tests -v
@@ -106,7 +105,8 @@ training/               dataset builder, Modal QLoRA + vLLM app, evaluation harn
 config/nodes*.json      demo node layouts (real + virtual; nodes-single.json for one board)
 site/                   browser flasher (ESP Web Tools) + Web Serial console, served on GitHub Pages
 .github/workflows/      firmware cloud build → merged image → Pages deploy
-docs/                   SETUP_GUIDE (runbook), HARDWARE_BRINGUP (test log + calibration), demo-script
+docs/                   SETUP_GUIDE (runbook), PROJECT_ASSESSMENT ($0 plan), HARDWARE_BRINGUP (test log), demo-script
+scripts/                run_local_model.sh (llama.cpp server), lora_to_gguf.sh (adapter → GGUF)
 tests/                  stdlib unittest suite
 ```
 

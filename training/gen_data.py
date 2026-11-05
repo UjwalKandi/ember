@@ -74,9 +74,9 @@ def _step(msgs: List[dict], ep: Episode, name: str, args: Dict[str, Any]) -> str
     return result
 
 
-def trajectory(ep: Episode, rng: random.Random) -> Dict[str, Any]:
+def trajectory(ep: Episode, rng: random.Random, max_events: int = 40) -> Dict[str, Any]:
     msgs: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt(ep.swarm.context())}]
+                        {"role": "user", "content": user_prompt(ep.swarm.context(max_events=max_events))}]
     before = ep.swarm.airtime_used_ms()
     inv, skipped = policy.investigate_plan(ep.swarm)
     results = [_step(msgs, ep, n, a) for n, a in inv]
@@ -98,6 +98,8 @@ def main() -> None:
     ap.add_argument("--eval-per-scenario", type=int, default=30)
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--out", default="data")
+    ap.add_argument("--max-events", type=int, default=40, help="events listed in each context (shorter = fewer tokens)")
+    ap.add_argument("--max-examples", type=int, default=0, help="subsample to this many rows (0 = all)")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -105,11 +107,13 @@ def main() -> None:
     rows, stats = [], Counter()
     for sc in [s for s in sim.SCENARIOS if s not in HOLDOUT]:
         for seed in range(args.per_scenario):
-            row = trajectory(make_episode(sc, seed), rng)
+            row = trajectory(make_episode(sc, seed), rng, args.max_events)
             rows.append(row)
             stats[(row["meta"]["verdict"], row["meta"]["cause"])] += 1
             stats[("budget", row["meta"]["budget"])] += 1
     rng.shuffle(rows)
+    if args.max_examples:
+        rows = rows[:args.max_examples]
     n_val = max(1, int(len(rows) * args.val_frac))
     for name, part in (("val", rows[:n_val]), ("train", rows[n_val:])):
         with open(out / f"{name}.jsonl", "w") as f:
