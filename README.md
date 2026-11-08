@@ -1,4 +1,29 @@
-# EMBER: Edge Mesh for Burn Early-warning & Reporting
+# EMBER v2: a distributed passive wireless-security sensing mesh
+
+> **Status (2026-11-08): pivot in progress.** EMBER is being rebuilt as a **$10-per-node wireless intrusion detection system (WIDS)**.
+> - ESP32 **sensor arms** passively listen to Wi-Fi management frames and BLE advertisements.
+> - A **core ESP32** fuses their reports over a **LoRa mesh** and decides with deterministic math.
+> - A **local small language model** explains incidents and compiles plain-English policies into verified configs.
+>
+> - Objectives, guardrails, metrics: **[docs/OBJECTIVES.md](docs/OBJECTIVES.md)**
+> - Architecture and roadmap: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+> - Why we pivoted: **[docs/ASSESSMENT_V2.md](docs/ASSESSMENT_V2.md)**
+>
+> **Authorized, passive use only:** EMBER never transmits on Wi-Fi/BLE, parses metadata only, and hashes client MACs. Deploy it only where you own or are authorized to monitor the networks.
+
+**What it detects:**
+- evil-twin / rogue access points
+- deauthentication floods
+- beacon spam and KARMA-style fake APs
+- BLE trackers following a person
+
+It also **locates the source** from signal strength measured at several nodes.
+
+Until roadmap phase R1 lands, the code below is still the v1 wildfire prototype (also archived at git tag `wildfire-v1`). Its mesh, protocol, simulator, eval harness, training pipeline and browser flasher carry over to v2.
+
+---
+
+# v1 (archived): EMBER: Edge Mesh for Burn Early-warning & Reporting
 
 **Existing wildfire networks detect. EMBER investigates, and re-programs its own sensors while doing it.**
 

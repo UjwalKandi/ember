@@ -4,6 +4,22 @@ A step-by-step runbook for taking EMBER from a fresh clone to a live demo. Use i
 
 Every phase ends with a ✅ checklist. Don't move on until it passes.
 
+> **v2 pivot (2026-11-08).** EMBER is becoming a passive wireless-security sensing mesh: ESP32 sensor arms plus a core node over LoRa, with a local SLM analyst. See [OBJECTIVES.md](OBJECTIVES.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+> - **Still valid:** phases A–B (laptop setup, Hugging Face) and the LLM labs 00–02.
+> - **v1 wildfire only:** phase C (camera/mic bring-up), phases F–G and labs 03–05 (code archived at tag `wildfire-v1`).
+>
+> New phases, one at a time; each gets its own detailed steps here once we start it:
+>
+> | Phase | What | Cost | ✅ Done when |
+> |---|---|---|---|
+> | R0 | objectives, architecture, assessment docs; tag `wildfire-v1` | $0 | docs on GitHub, tests pass |
+> | R1 | one sensor arm over USB: Wi-Fi mgmt-frame + BLE capture | $0 | dashboard lists nearby APs (channel, RSSI, security) and counts deauth frames |
+> | R2 | RF simulator + deterministic engine + eval | $0 | unit tests + engine-vs-baseline table |
+> | R3 | 3 arms + core over time-sliced ESP-NOW; localization | $0 | authorized self-test: your own hotspot cloned as an evil twin is detected and located |
+> | R4 | LoRa transport (4× Wio-SX1262 for XIAO, ~$5–10 each, legal band for your region) | ~$20–40 | same demo over LoRa |
+> | R5–R7 | assistant labs: grounded Q&A (SFT→DPO), policy→config (SFT→GRPO), triage agent | $0 | numbers in LEARNING_LOG |
+> | R8 | write-up + demo video | $0 | published |
+
 | Phase | What | Time | Can run in parallel with |
 |---|---|---|---|
 | [A](#phase-a-laptop-setup) | Laptop setup | ~20 min | — |

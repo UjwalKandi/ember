@@ -1,5 +1,7 @@
 # EMBER LLM labs: from running a model to SFT and RL
 
+> **v2 pivot (2026-11-08):** labs 00–02 apply unchanged. Labs 03–08 are being re-targeted from the wildfire decision agent to the v2 assistant roles: grounded incident Q&A (SFT → DPO), policy → config with a verifier reward (GRPO), and a novelty-triage agent. In v2 the LLM never makes the alert decision. See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#6-assistant-local-slm-never-in-the-decision-path).
+
 A hands-on course built on this repo. You learn by doing real LLM engineering on a real system: a small language model (SLM) that runs on your Mac becomes the brain of the EMBER sensor swarm. You run it, measure it, fine-tune it, ship it back to llama.cpp, and later improve it with preference tuning and reinforcement learning.
 
 **Budget: $0.** Everything runs on your M2 MacBook (24 GB) with free, open-source tools. A free Kaggle GPU is needed only for the optional 7–8B work.

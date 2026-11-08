@@ -1,5 +1,7 @@
 # EMBER project assessment (updated 2026-11-07)
 
+> **Superseded on 2026-11-08** by the v2 pivot to a passive wireless-security mesh: [ASSESSMENT_V2.md](ASSESSMENT_V2.md), [OBJECTIVES.md](OBJECTIVES.md). The cost and free-tooling decisions below still apply.
+
 Post-hackathon review of every phase and component, and the switch to **free / open-source resources only**.
 
 ## Phases
