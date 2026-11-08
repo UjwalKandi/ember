@@ -4,6 +4,10 @@
     python -m gateway.server --serial /dev/cu.usbmodem1101        # real nodes via gateway XIAO
     python -m gateway.server --serial /dev/cu.usbmodem1101 --sim quiet --nodes config/nodes.json   # mixed
     add --agent llm (default if EMBER_LLM_URL is set) or --agent heuristic
+
+v2 RF arms: their packets feed the airspace view at /airspace (the swarm map stays at /).
+    python -m gateway.server --serial /dev/cu.usbmodem1101 --record captures/home.log
+    python -m gateway.server --replay captures/home.log --replay-speed 4
 """
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import protocol as elp
 from . import sim
 from .agent import GlimmerAgent
+from .airspace import Airspace, is_rf, read_capture
+from .bridge import handle_line
 from .llm import ChatClient
 from .policy import HOT, HeuristicAgent
 from .swarm import LogEntry, Swarm
@@ -54,14 +60,56 @@ class CommandCenter:
         self.bridge = None
         self.t0 = time.monotonic()
         self.real_ids: set = set()
+        self.replay_t: Optional[float] = None
+        self.airspace = Airspace(clock=self._rf_clock)
+        self.recording = None
+        if args.record:
+            Path(args.record).parent.mkdir(parents=True, exist_ok=True)
+            self.recording = open(args.record, "a", buffering=1)
+            self.recording.write(f"# EMBER capture {time.strftime('%Y-%m-%dT%H:%M:%S')} port={args.serial}\n")
         self.reset(args.sim, args.seed)
         if args.serial:
             from .bridge import SerialBridge
-            self.bridge = SerialBridge(args.serial, lambda rx: self.swarm.on_rx(rx),
-                                       on_log=lambda s: self.publish({"type": "log", "text": s}))
+            self.bridge = SerialBridge(args.serial, self._on_rx, on_log=self._on_log, on_raw=self._record)
             self.swarm.transports.append(self.bridge)
             self._reset_hardware()
+        if args.replay:
+            threading.Thread(target=self._replay, args=(args.replay, args.replay_speed), daemon=True).start()
         threading.Thread(target=self._loop, daemon=True).start()
+
+    # --- board lines: v1 nodes -> swarm, v2 arms -> airspace ------------------
+
+    def _on_rx(self, rx: elp.RxLine) -> None:
+        if not is_rf(rx.packet):
+            self.swarm.on_rx(rx)
+            return
+        self.airspace.on_rx(rx)
+        self.publish({"type": "rfpkt", "t": round(self._rf_clock(), 1), "src": rx.src,
+                      "raw": rx.packet.raw or rx.packet.encode()})
+
+    def _on_log(self, text: str) -> None:
+        self.publish({"type": "log", "text": text})
+
+    def _record(self, line: str) -> None:
+        if self.recording:
+            self.recording.write(f"{time.monotonic() - self.t0:.3f}\t{line}\n")
+
+    def _rf_clock(self) -> float:
+        return self.replay_t if self.replay_t is not None else time.monotonic() - self.t0
+
+    def _replay(self, path: str, speed: float) -> None:
+        """Feed a capture through the same path as live serial, paced by its timestamps."""
+        t_prev = None
+        self.replay_t = 0.0
+        with open(path) as f:
+            for t, line in read_capture(f):
+                if t is not None:
+                    if t_prev is not None and t > t_prev:
+                        time.sleep((t - t_prev) / speed)
+                        self.replay_t += t - t_prev
+                    t_prev = t
+                handle_line(line, self._on_rx, self._on_log)
+        self._on_log(f"replay finished: {path}")
 
     # --- world setup -------------------------------------------------------
 
@@ -136,6 +184,8 @@ class CommandCenter:
             if time.monotonic() - last_state > 0.5:
                 last_state = time.monotonic()
                 self.publish({"type": "state", **self.state()})
+                if self.airspace.counts:
+                    self.publish({"type": "airspace", **self.airspace.snapshot()})
 
     def _on_packet(self, e: LogEntry) -> None:
         self.publish({"type": "pkt", "t": round(e.t, 1), "src": e.src, "hops": e.hops, "rssi": e.rssi,
@@ -219,8 +269,9 @@ def make_handler(cc: CommandCenter):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path in ("/", "/index.html"):
-                body = (STATIC / "index.html").read_bytes()
+            if self.path in ("/", "/index.html", "/airspace"):
+                page = "airspace.html" if self.path == "/airspace" else "index.html"
+                body = (STATIC / page).read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -229,6 +280,8 @@ def make_handler(cc: CommandCenter):
             elif self.path == "/api/state":
                 self._json({**cc.state(), "history": cc.history[-5:], "trace": cc.trace,
                             "scenarios": list(sim.SCENARIOS)})
+            elif self.path == "/api/airspace":
+                self._json(cc.airspace.snapshot())
             elif self.path == "/api/context":
                 self._json({"context": cc.swarm.context()})
             elif self.path == "/events":
@@ -273,7 +326,7 @@ def make_handler(cc: CommandCenter):
     return H
 
 
-def main() -> None:
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sim", default=None, choices=list(sim.SCENARIOS), help="virtual scenario to run")
     ap.add_argument("--seed", type=int, default=7)
@@ -289,15 +342,25 @@ def main() -> None:
     ap.add_argument("--area", default="Sector A")
     ap.add_argument("--airtime-budget", type=float, default=36.0,
                     help="command-center LoRa airtime per hour, seconds (36 = 1%% duty cycle)")
+    ap.add_argument("--record", help="append every board line to this capture file (replayable, L2 training data)")
+    ap.add_argument("--replay", help="replay a capture file into the dashboard instead of (or besides) a board")
+    ap.add_argument("--replay-speed", type=float, default=1.0)
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to share the dashboard on the LAN")
     ap.add_argument("--port", type=int, default=8080)
-    args = ap.parse_args()
-    if not args.sim and not args.serial:
+    args = ap.parse_args(argv)
+    if not args.sim and not args.serial and not args.replay:
         args.sim = "quiet"
+    return args
+
+
+def main() -> None:
+    args = parse_args()
     cc = CommandCenter(args)
     srv = ThreadingHTTPServer((args.host, args.port), make_handler(cc))
     print(f"EMBER command center on http://localhost:{args.port}  agent={args.agent} "
           f"sim={args.sim} serial={args.serial}")
+    if args.serial or args.replay:
+        print(f"airspace view (v2 arms) on http://localhost:{args.port}/airspace")
     srv.serve_forever()
 
 

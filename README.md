@@ -1,25 +1,37 @@
 # EMBER v2: a distributed passive wireless-security sensing mesh
 
-> **Status (2026-11-08): pivot in progress.** EMBER is being rebuilt as a **$10-per-node wireless intrusion detection system (WIDS)**.
-> - ESP32 **sensor arms** passively listen to Wi-Fi management frames and BLE advertisements.
-> - A **core ESP32** fuses their reports over a **LoRa mesh** and decides with deterministic math.
-> - A **local small language model** explains incidents and compiles plain-English policies into verified configs.
+> **Status (2026-11-08): lean v2, phase L0.** EMBER watches the **wireless airspace of a space you own** with a $10 ESP32, and is built as a hands-on path through ESP32 systems, training models from scratch, and fine-tuning language models to run locally.
+> - An ESP32 **sensor arm** passively listens to Wi-Fi management frames and BLE advertisements and runs an **on-device TinyML attack classifier** (the novelty, L2).
+> - On the laptop, a **deterministic engine** decides and a **response playbook** records what EMBER did and what you should do. EMBER never transmits.
+> - A **fine-tuned local language model** (llama.cpp) writes the **incident report**, and an automatic checker scores it for faithfulness (L3).
 >
 > - Objectives, guardrails, metrics: **[docs/OBJECTIVES.md](docs/OBJECTIVES.md)**
 > - Architecture and roadmap: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 > - Why we pivoted: **[docs/ASSESSMENT_V2.md](docs/ASSESSMENT_V2.md)**
 >
-> **Authorized, passive use only:** EMBER never transmits on Wi-Fi/BLE, parses metadata only, and hashes client MACs. Deploy it only where you own or are authorized to monitor the networks.
+> **Authorized, passive use only:** EMBER never transmits on Wi-Fi/BLE, parses metadata only, and hashes client addresses. Deploy it only where you own or are authorized to monitor the networks.
+
+> **Set these up first: EMBER complements baseline hardening, it does not replace it.**
+> **WPA3 (or WPA2/3) with PMF** on your router · a **separate guest network/VLAN** for visitors and IoT · **firmware updates** for router and devices. EMBER adds visibility on top, and its dashboard flags networks without PMF or with open/WEP/WPA1 security.
 
 **What it detects:**
 - evil-twin / rogue access points
 - deauthentication floods
 - beacon spam and KARMA-style fake APs
-- BLE trackers following a person
+- BLE trackers brought into your space
 
-It also **locates the source** from signal strength measured at several nodes.
+Roadmap L0–L4 and what you learn in each: [ARCHITECTURE §8](docs/ARCHITECTURE.md#8-roadmap) · learning track: [labs/README.md](labs/README.md).
 
-Until roadmap phase R1 lands, the code below is still the v1 wildfire prototype (also archived at git tag `wildfire-v1`). Its mesh, protocol, simulator, eval harness, training pipeline and browser flasher carry over to v2.
+**Try R1 now:**
+```bash
+# no hardware: replay the synthetic capture into the airspace view
+python3 -m gateway.server --replay tests/fixtures/airspace_sample.log      # http://localhost:8080/airspace
+# one board: flash from https://ujwalkandi.in/ember/, "Make arm (v2)" + id 1 in the console, then
+python3 -m gateway.server --serial /dev/cu.usbmodemXXXX --record captures/home.log
+```
+Arm firmware: [firmware/README.md](firmware/README.md). Packets: [protocol/SPEC.md §4](protocol/SPEC.md). Runbook: [SETUP_GUIDE Phase R1](docs/SETUP_GUIDE.md#phase-r1-one-sensor-arm-over-usb).
+
+The rest of the code below is still the v1 wildfire prototype (also archived at git tag `wildfire-v1`). Its mesh, protocol, simulator, eval harness, training pipeline, browser flasher, serial console and dashboard carry over to v2.
 
 ---
 
@@ -124,8 +136,8 @@ python3 -m unittest discover -s tests -v
 
 ```
 protocol/SPEC.md        Ember Link Protocol: frame, packet grammar, serial bridge
-firmware/               XIAO ESP32-S3 Sense: one image, runtime role/id, ESP-NOW flood mesh, flicker-gated flame + haze + mic detectors, USB console
-gateway/                command center: protocol, sim, swarm state, tools, agent loop, dashboard server
+firmware/               XIAO ESP32-S3 Sense: one image, runtime role/id; v2 arm (passive Wi-Fi/BLE capture, feature windows; host tests in test_host/); v1 ESP-NOW mesh + flame/haze/mic detectors; USB console
+gateway/                command center: protocol (ELP v1+v2), sim, swarm state, airspace mirror (v2 arms), tools, agent loop, dashboard server (/ and /airspace)
 training/               dataset builder, LoRA/QLoRA trainer, export to GGUF, bake-off, evaluation harness
 config/nodes*.json      demo node layouts (real + virtual; nodes-single.json for one board)
 site/                   browser flasher (ESP Web Tools) + Web Serial console, served on GitHub Pages

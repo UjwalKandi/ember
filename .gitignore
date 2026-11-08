@@ -16,3 +16,4 @@ models/
 runs/
 results/logs/
 results/bakeoff-*.json
+captures/

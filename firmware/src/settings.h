@@ -5,7 +5,8 @@
 // and is provisioned over USB serial: `CFG|id=3`, `CFG|role=gateway`. See protocol/SPEC.md §3.
 namespace settings {
 
-enum Role : uint8_t { NODE = 0, GATEWAY = 1 };
+// NODE and GATEWAY are the v1 (wildfire) roles; ARM is the v2 passive RF sensor.
+enum Role : uint8_t { NODE = 0, GATEWAY = 1, ARM = 2 };
 
 void begin();
 Role role();
@@ -23,7 +24,7 @@ void setCam(bool swap, float gain, uint8_t flick);   // persists and applies imm
 }  // namespace settings
 
 // Shared USB serial console: line reader plus the commands every role understands
-// (CFG?, CFG|id=N, CFG|role=node|gateway, TEST, REBOOT, CAM?, CAM|swap=0/1, CAM|gain=N,
+// (CFG?, CFG|id=N, CFG|role=arm|node|gateway, TEST, REBOOT, CAM?, CAM|swap=0/1, CAM|gain=N,
 // CAM|flick=N).
 // Role-specific lines (TX|...) are handed back to the caller.
 namespace console {

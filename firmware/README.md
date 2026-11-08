@@ -2,7 +2,10 @@
 
 One firmware image for the XIAO ESP32-S3 Sense. Every board runs the same image; its **role** and **node id** are settings saved in flash and set over USB serial:
 
-- **node** (`CFG|id=<1-254>`): camera + PDM microphone, on-device flame/smoke/crackle/motion detection, sends compact ELP packets (`protocol/SPEC.md`) and answers commands. When plugged into a laptop it also **bridges itself**: it prints its own packets and everything it hears on the mesh as `RX|...` lines and accepts `TX|...`, so **a single node works with the command center without a gateway**.
+- **arm** (v2, the default on a fresh board; `CFG|role=arm`, then `CFG|id=<1-254>`): passive RF sensor. Wi-Fi management frames in promiscuous mode with channel hopping, plus a passive BLE scan. It streams ELP v2 feature windows, AP digests, tracker sightings and events over USB (`protocol/SPEC.md` §4). It is **listen-only**: it never transmits on Wi-Fi or BLE. Open the airspace view with `python -m gateway.server --serial <port>` → `http://localhost:8080/airspace`.
+
+The v1 wildfire roles are still in the image:
+- **node** (`CFG|role=node`, then `CFG|id=<1-254>`): camera + PDM microphone, on-device flame/smoke/crackle/motion detection, sends compact ELP packets (`protocol/SPEC.md`) and answers commands. When plugged into a laptop it also **bridges itself**: it prints its own packets and everything it hears on the mesh as `RX|...` lines and accepts `TX|...`, so **a single node works with the command center without a gateway**.
 - **gateway** (`CFG|role=gateway`): no sensors; bridges the mesh to the laptop over USB (`RX|src|hops|rssi|body` / `TX|body`).
 
 Transport is ESP-NOW broadcast on channel 1 with Meshtastic-style managed flooding: ≤200 B bodies, TTL 3, a dedupe ring keyed on `(src, pkt_id)`, and 5-40 ms random relay jitter. Every node relays, so a node out of gateway range still gets through via its neighbours.
@@ -12,6 +15,12 @@ Transport is ESP-NOW broadcast on channel 1 with Meshtastic-style managed floodi
 | file | purpose |
 |---|---|
 | `src/main.cpp` | picks the role at boot from the stored setting |
+| `src/arm.cpp` | v2 arm: feature window per dwell → `W`, AP table → `A`, trackers → `B`, R1 threshold events → `E`, heartbeat → `H`; `PLAN|…` console |
+| `src/frames.{h,cpp}` | pure C++: 802.11 management-frame parser (kind, addresses, seq, SSID, channel, security/PMF from RSN, IE fingerprint) and BLE advertisement tracker classifier |
+| `src/features.{h,cpp}` | pure C++: per-dwell feature window (the L2 classifier's input) and the 64-entry AP table (change detection, seq/TSF/IE anomalies) |
+| `src/sense_wifi.{h,cpp}` | promiscuous capture (MGMT filter), exact per-kind counters in the callback, queue to `loop()`, channel hopping |
+| `src/sense_ble.{h,cpp}` | passive BLE scan, salted SHA-256 address hashing, tracker table |
+| `test_host/test_frames.cpp` | host unit tests for `frames` + `features` (crafted frames, attack windows); run by `tests/test_rf.py` |
 | `src/settings.{h,cpp}` | role + node id in flash (NVS); USB console commands `CFG?`, `CFG|id=N`, `CFG|role=…`, `TEST`, `REBOOT` |
 | `src/selftest.{h,cpp}` | `TEST`: chip, PSRAM, mesh, camera and mic check, ends with `LOG|selftest PASS` |
 | `src/mesh.{h,cpp}` | ESP-NOW flood mesh (frame header, TTL/hops, dedupe, jittered relays, RSSI) |
@@ -49,7 +58,16 @@ If the upload port isn't found, hold **BOOT**, tap **RESET**, release BOOT, and 
 
 Optional battery reporting: wire a 2×100 kΩ divider from BAT+ to a free ADC pin and add `-DBATT_ADC_PIN=A0` to the build flags. Without it, nodes leave the `b` token out of heartbeats and PONGs.
 
-## Test procedure
+## Test procedure (v2 arm)
+
+1. **Boot.** `CFG|role=arm` (fresh boards already are), then `CFG|id=1`. The console shows
+   `LOG|EMBER v2-xxxxxxx role=arm id=1 mac=.. wifi=ok ble=ok (listen-only)` and `LOG|plan 1,…,13@300`.
+2. **Stream.** Every 300 ms there's a `RX|1|0|0|W|n1|…` window. Within a few seconds you'll see `A|…` for nearby access points, and an `H|…|ap<N>|ble<N>|…` heartbeat every 30 s.
+3. **Self-test.** `TEST` → `LOG|selftest wifi=ok frames=<N> … ble=ok …` → `LOG|selftest PASS`. `frames=0` after a few seconds means no management frames are arriving: check the antenna is attached.
+4. **Deauth counting (authorized).** Rebooting **your own** router or hotspot makes it send deauth/disassoc frames to its clients. They show up in `W` as `dea`/`dis` and in the dashboard's deauth panel. Never generate deauths against networks you don't own.
+5. **Host tests (no board).** `c++ -std=c++17 -I src test_host/test_frames.cpp src/frames.cpp src/features.cpp -o /tmp/t && /tmp/t`
+
+## Test procedure (v1 wildfire node / gateway)
 
 1. **Gateway boot.** In the console (or `pio device monitor -e ember`) the gateway prints
    `LOG|EMBER v2-xxxxxxx role=gateway mac=.. ch=1 mesh=ok`.

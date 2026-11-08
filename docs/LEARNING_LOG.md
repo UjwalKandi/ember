@@ -19,6 +19,7 @@ See [labs/README.md](../labs/README.md#skills-checklist-what-an-sftrl-engineer-i
 - [ ] DPO (07)
 - [ ] GRPO + reward design (08)
 - [ ] Edge deployment (09)
+- [ ] TinyML classifier from scratch → int8 → ESP32, C/Python parity (10)
 
 ---
 
@@ -89,3 +90,13 @@ Write this last, in 5–8 bullet points, for your CV or LinkedIn:
 - **Deployment:** (GGUF quant, tok/s on an M2, edge device)
 - **What I learned:**
 - **Links:** https://github.com/UjwalKandi/ember
+
+## Lab 10: TinyML attack classifier (L2)
+| Run | Model | Params | Int8 size | Recall (sim) | False alarms/h (real benign) | µs/inference | Notes |
+|---|---|---|---|---|---|---|---|
+| thresholds | rules | 0 | 0 | | | | |
+| | | | | | | | |
+
+| Date | What I did | What surprised me | Next |
+|---|---|---|---|
+| | | | |

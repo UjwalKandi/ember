@@ -21,7 +21,7 @@
 <body>
 <main>
   <h1><span>EMBER</span> · flash a swarm node</h1>
-  <div class="muted">Firmware <code>__FW_VERSION__</code> · XIAO ESP32-S3 Sense · one image for every board (node or gateway)</div>
+  <div class="muted">Firmware <code>__FW_VERSION__</code> · XIAO ESP32-S3 Sense · one image for every board (arm, node or gateway)</div>
 
   <div class="card">
     <b>1. Install the firmware</b>
@@ -42,17 +42,18 @@
     <b>2. Set it up and test it</b>
     <ol>
       <li>Open the <a href="console.html">EMBER serial console</a>, click <b>Connect</b>, and pick the same port.</li>
-      <li>Give the board its identity: <code>CFG|id=1</code> (2, 3, … for the next boards) or <code>CFG|role=gateway</code>. It reboots.</li>
+      <li>Give the board its identity: <code>CFG|id=1</code> (2, 3, … for the next boards). New boards start as a v2 <b>arm</b> (passive Wi-Fi/BLE sensor); <code>CFG|role=node</code> / <code>CFG|role=gateway</code> switch to the v1 wildfire roles. It reboots.</li>
       <li>Click <b>Self-test</b>. You want <code>LOG|selftest PASS</code>.</li>
-      <li>Within 30 s you'll see heartbeats like <code>RX|1|0|0|H|n1|s1|up5|hz4|snd5</code>.</li>
+      <li>An arm streams feature windows right away (<code>RX|1|0|0|W|n1|s2|ch1|dt300|bcn14|…</code>), access points (<code>A|…</code>) and a heartbeat every 30 s (<code>H|n1|…|ap12|ble9|…</code>).</li>
     </ol>
   </div>
 
   <div class="card">
     <b>3. Use it with the command center</b>
     <p>Close the console tab first (only one program can use the port). Then on the laptop:</p>
-    <code>python -m gateway.server --serial /dev/cu.usbmodemXXXX --nodes config/nodes-single.json --sim quiet --auto</code>
-    <p class="muted">A single node plugged in over USB works as its own gateway. Full guide: <a href="https://github.com/UjwalKandi/ember/blob/main/docs/SETUP_GUIDE.md">docs/SETUP_GUIDE.md</a></p>
+    <code>python -m gateway.server --serial /dev/cu.usbmodemXXXX --record captures/home.log</code>
+    <p>then open <code>http://localhost:8080/airspace</code> for the arm's live airspace view (the swarm map stays at <code>/</code>).</p>
+    <p class="muted">A single board plugged in over USB works as its own gateway. Full guide: <a href="https://github.com/UjwalKandi/ember/blob/main/docs/SETUP_GUIDE.md">docs/SETUP_GUIDE.md</a></p>
   </div>
 </main>
 </body>

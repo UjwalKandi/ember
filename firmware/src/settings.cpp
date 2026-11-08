@@ -9,7 +9,7 @@ namespace settings {
 namespace {
 
 Preferences prefs;
-Role curRole = NODE;
+Role curRole = ARM;
 uint8_t curId = 0;
 bool curSwap = true;
 float curGain = 30.0f;
@@ -19,7 +19,7 @@ uint8_t curFlick = 15;
 
 void begin() {
   prefs.begin("ember", true);
-  curRole = (Role)prefs.getUChar("role", NODE);
+  curRole = (Role)prefs.getUChar("role", ARM);   // fresh boards start as v2 arms
   curId = prefs.getUChar("id", NODE_ID);
   curSwap = prefs.getBool("cswap", true);   // measured: XIAO frames need the byte swap
   curGain = prefs.getFloat("fgain", 30.0f);
@@ -29,7 +29,7 @@ void begin() {
 
 Role role() { return curRole; }
 uint8_t nodeId() { return curId; }
-const char *roleName() { return curRole == GATEWAY ? "gateway" : "node"; }
+const char *roleName() { return curRole == GATEWAY ? "gateway" : curRole == ARM ? "arm" : "node"; }
 bool camSwap() { return curSwap; }
 float flameGain() { return curGain; }
 uint8_t flickPct() { return curFlick; }
@@ -94,12 +94,16 @@ bool handleCommon(const char *l) {
     settings::setId(id);
     printConfig();
     reboot();
-  } else if (strcmp(l, "CFG|role=gateway") == 0 || strcmp(l, "CFG|role=node") == 0) {
-    settings::setRole(strcmp(l + 9, "gateway") == 0 ? settings::GATEWAY : settings::NODE);
+  } else if (strcmp(l, "CFG|role=gateway") == 0 || strcmp(l, "CFG|role=node") == 0 ||
+             strcmp(l, "CFG|role=arm") == 0) {
+    const char *r = l + 9;
+    settings::setRole(strcmp(r, "gateway") == 0 ? settings::GATEWAY
+                      : strcmp(r, "arm") == 0   ? settings::ARM
+                                                : settings::NODE);
     printConfig();
     reboot();
   } else if (strncmp(l, "CFG", 3) == 0) {
-    Serial.println("LOG|cfg error: use CFG?, CFG|id=<1-254>, CFG|role=node|gateway");
+    Serial.println("LOG|cfg error: use CFG?, CFG|id=<1-254>, CFG|role=arm|node|gateway");
   } else if (strcmp(l, "CAM?") == 0) {
     cam::diag();
   } else if (strncmp(l, "CAM|swap=", 9) == 0) {

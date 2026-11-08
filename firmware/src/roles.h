@@ -10,3 +10,8 @@ namespace gateway {
 void setup();
 void loop();
 }
+
+namespace arm {  // v2 passive RF sensor arm
+void setup();
+void loop();
+}

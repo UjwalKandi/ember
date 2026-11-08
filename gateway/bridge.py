@@ -8,11 +8,26 @@ from typing import Callable, Optional
 from . import protocol as elp
 
 
+def handle_line(line: str, on_rx: Callable[[elp.RxLine], None], on_log: Callable[[str], None]) -> None:
+    """One board line: LOG| -> on_log, RX| -> on_rx, anything unparseable -> on_log."""
+    if line.startswith("LOG|"):
+        on_log(line[4:])
+        return
+    try:
+        rx = elp.parse_serial(line)
+    except (elp.ProtocolError, ValueError) as e:
+        on_log(f"bad line {line!r}: {e}")
+        return
+    if rx:
+        on_rx(rx)
+
+
 class SerialBridge:
     synchronous = False
 
     def __init__(self, port: str, on_rx: Callable[[elp.RxLine], None], baud: int = 115200,
-                 on_log: Optional[Callable[[str], None]] = None):
+                 on_log: Optional[Callable[[str], None]] = None,
+                 on_raw: Optional[Callable[[str], None]] = None):
         try:
             import serial  # pyserial
         except ImportError as e:
@@ -25,6 +40,7 @@ class SerialBridge:
                                  f"(or click Disconnect), quit any `pio device monitor`, then run this again.\n")
             raise SystemExit(f"\ncould not open {port}: {e}\nCheck the cable and `ls /dev/cu.usbmodem*`.\n")
         self.on_rx, self.on_log = on_rx, on_log or (lambda s: None)
+        self.on_raw = on_raw or (lambda s: None)   # every line as received (capture recording)
         self._wlock = threading.Lock()
         self._stop = False
         threading.Thread(target=self._reader, daemon=True).start()
@@ -41,18 +57,9 @@ class SerialBridge:
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
                 line = raw.decode("ascii", "replace").strip()
-                if not line:
-                    continue
-                if line.startswith("LOG|"):
-                    self.on_log(line[4:])
-                    continue
-                try:
-                    rx = elp.parse_serial(line)
-                except (elp.ProtocolError, ValueError) as e:
-                    self.on_log(f"bad line {line!r}: {e}")
-                    continue
-                if rx:
-                    self.on_rx(rx)
+                if line:
+                    self.on_raw(line)
+                    handle_line(line, self.on_rx, self.on_log)
 
     def send(self, pkt: elp.Packet) -> None:
         with self._wlock:

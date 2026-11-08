@@ -1,17 +1,40 @@
-"""Ember Link Protocol (ELP) v1 encode/parse. See protocol/SPEC.md."""
+"""Ember Link Protocol (ELP) encode/parse: v1 node packets and v2 RF-arm packets. See protocol/SPEC.md."""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 MAX_BODY = 200
-TYPES = ("H", "E", "C", "R")
+TYPES = ("H", "E", "C", "R", "A", "B", "W")
+RF_TYPES = ("A", "B", "W")       # v2 arm-only packet types
 EVENT_CODES = ("FLM", "SMK", "CRK", "MOT", "OK")
+RF_EVENT_CODES = ("DEA", "BSP")  # v2 arm events: deauth/disassoc burst, beacon spam
 COMMANDS = ("PING", "CONFIRM", "SET", "ALERT")
 RESPONSES = ("PONG", "CONF", "ACK")
 
 _KV = re.compile(r"^([a-z]+)(-?\d+(?:\.\d+)?)$")
+_STR = re.compile(r"^([a-z]+):(.*)$")   # v2 string token, e.g. b:a1b2c3d4e5f6, ss:Home%20Net
+_ESC = re.compile(r"%([0-9A-F]{2})")
+
+
+def escape(s: str) -> str:
+    """String value -> token text: space, '|', '%' and non-printable bytes become %XX."""
+    return "".join(chr(b) if 0x20 < b < 0x7F and b not in (0x25, 0x7C) else f"%{b:02X}"
+                   for b in s.encode("utf-8", "surrogateescape"))
+
+
+def unescape(s: str) -> str:
+    """Inverse of escape. SSIDs are raw bytes; invalid UTF-8 round-trips via surrogateescape."""
+    out, i = bytearray(), 0
+    while i < len(s):
+        if s[i] == "%" and _ESC.match(s, i):
+            out.append(int(s[i + 1:i + 3], 16))
+            i += 3
+        else:
+            out += s[i].encode("utf-8", "surrogateescape")
+            i += 1
+    return out.decode("utf-8", "surrogateescape")
 
 
 class ProtocolError(ValueError):
@@ -20,10 +43,10 @@ class ProtocolError(ValueError):
 
 @dataclass
 class Packet:
-    type: str                      # H | E | C | R
+    type: str                      # H | E | C | R (v1, v2) | A | B | W (v2 arm)
     target: str                    # "n3" or "*"
     codes: List[str] = field(default_factory=list)       # FLM, CONFIRM, CONF, ...
-    fields: Dict[str, float] = field(default_factory=dict)  # s, c, hz, snd, b, up, q, ...
+    fields: Dict[str, Union[float, str]] = field(default_factory=dict)  # s, c, hz, ...; v2 also b:, ss:
     raw: str = ""
 
     @property
@@ -46,7 +69,7 @@ class Packet:
         parts.extend(self.codes)
         for k, v in self.fields.items():
             if k not in ("s", "q"):
-                parts.append(f"{k}{_fmt(v)}")
+                parts.append(f"{k}:{escape(v)}" if isinstance(v, str) else f"{k}{_fmt(v)}")
         body = "|".join(parts)
         if len(body) > MAX_BODY:
             raise ProtocolError(f"body {len(body)}B exceeds {MAX_BODY}B")
@@ -79,6 +102,9 @@ def parse(body: str) -> Packet:
         if m:
             num = float(m.group(2))
             pkt.fields[m.group(1)] = int(num) if num.is_integer() else num
+        elif _STR.match(tok):
+            k, v = _STR.match(tok).groups()
+            pkt.fields[k] = unescape(v)
         elif tok.isupper():
             pkt.codes.append(tok)
         else:

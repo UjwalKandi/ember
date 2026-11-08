@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EMBER Airspace</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #2a313c; --text: #e6edf3; --muted: #8b949e;
+    --ok: #3fb950; --warn: #d29922; --crit: #f85149; --info: #58a6ff; --accent: #ff7b39;
+    --bar: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  header a { color: var(--muted); font-size: 12px; }
+  .pill { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .pill.ok { color: var(--ok); border-color: var(--ok); } .pill.bad { color: var(--crit); border-color: var(--crit); }
+  .spacer { flex: 1; }
+  main { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px; height: calc(100vh - 50px); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+  section h2 { margin: 0; padding: 8px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  section h2 .sub { text-transform: none; letter-spacing: 0; margin-left: auto; font-size: 11px; }
+  .scroll { overflow: auto; flex: 1; min-height: 0; }
+  #aps { grid-row: span 2; }
+  #deauth { grid-column: span 2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 4px 8px; border-bottom: 1px solid #1c222b; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .muted { color: var(--muted); }
+  tr.stale td { opacity: .45; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); font-size: 11px; margin: 1px 3px 1px 0; white-space: nowrap; }
+  .tag.crit { border-color: var(--crit); } .tag.crit::before { content: "✕ "; color: var(--crit); }
+  .tag.warn { border-color: var(--warn); } .tag.warn::before { content: "! "; color: var(--warn); }
+  .tag.info::before { content: "i "; color: var(--info); }
+  /* deauth strip: stat tiles + per-channel bars + per-window sparkline */
+  .strip { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) minmax(0, 1.2fr); gap: 18px; padding: 10px 14px; align-items: end; }
+  .stat .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .k { color: var(--muted); font-size: 11px; }
+  .chart .k { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 56px; border-bottom: 1px solid var(--line); }
+  .bars div { flex: 1; background: var(--bar); border-radius: 4px 4px 0 0; min-height: 1px; position: relative; }
+  .bars div:hover { filter: brightness(1.3); }
+  .axis { display: flex; gap: 2px; font-size: 10px; color: var(--muted); }
+  .axis span { flex: 1; text-align: center; }
+  #tip { position: fixed; pointer-events: none; background: #0b0f14; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; z-index: 9; }
+  .hot { color: var(--warn); font-weight: 600; }
+  #feed div { font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 10px; }
+  .E { color: var(--warn); } .A { color: var(--text); } .B { color: var(--info); } .H, .W { color: var(--muted); } .L { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>EMBER</span> · airspace</h1>
+  <span class="pill" id="arms">no arm yet</span>
+  <span class="pill" id="counts"></span>
+  <span class="spacer"></span>
+  <span class="muted" style="font-size:12px">listen-only: EMBER never transmits</span>
+  <a href="/">swarm map →</a>
+</header>
+<main>
+  <section id="deauth">
+    <h2>Deauth / disassoc frames <span class="sub">a burst of these knocks devices off Wi-Fi; PMF (WPA3) networks ignore spoofed ones</span></h2>
+    <div class="strip">
+      <div class="stat"><div class="v" id="dtotal">0</div><div class="k">total seen</div></div>
+      <div class="stat"><div class="v" id="d60">0</div><div class="k">last 60 s</div></div>
+      <div class="stat"><div class="v" id="dspf">0</div><div class="k">spoof-suspect (unprotected on a PMF-required AP)</div></div>
+      <div class="chart"><div class="k">by channel (total)</div><div class="bars" id="bych"></div><div class="axis" id="bychax"></div></div>
+      <div class="chart"><div class="k">per feature window (latest 120, one dwell each)</div><div class="bars" id="series"></div></div>
+    </div>
+  </section>
+  <section id="aps">
+    <h2>Access points <span class="sub" id="apcount"></span></h2>
+    <div class="scroll"><table>
+      <thead><tr><th>SSID</th><th>BSSID</th><th class="num">ch</th><th>security</th><th class="num">RSSI</th><th class="num">seen</th><th>notes</th></tr></thead>
+      <tbody id="aptable"><tr><td colspan="7" class="muted">Waiting for A packets from an arm…</td></tr></tbody>
+    </table></div>
+  </section>
+  <section>
+    <h2>Live feature windows <span class="sub">W packets: the on-device classifier's input (L2)</span></h2>
+    <div class="scroll"><table class="mono">
+      <thead><tr id="whead"></tr></thead>
+      <tbody id="wtable"></tbody>
+    </table></div>
+  </section>
+  <section>
+    <h2>Events · BLE trackers · packets</h2>
+    <div class="scroll" style="flex: 0 1 auto; max-height: 45%">
+      <table><tbody id="events"><tr><td class="muted">No events.</td></tr></tbody></table>
+      <table><tbody id="trackers"></tbody></table>
+    </div>
+    <div class="scroll" id="feed" style="border-top: 1px solid var(--line)"></div>
+  </section>
+</main>
+<div id="tip"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const W_COLS = ['arm', 'ch', 'dt', 'bcn', 'prq', 'prs', 'ath', 'asc', 'dea', 'dis', 'bc', 'spf', 'nb', 'nn', 'nss', 'ds', 'pd', 'sqa', 'tsj', 'iec', 'rx', 'ra'];
+const W_HELP = { ch: 'channel', dt: 'dwell ms', bcn: 'beacons', prq: 'probe requests', prs: 'probe responses', ath: 'auth', asc: 'assoc/reassoc requests',
+  dea: 'deauth', dis: 'disassoc', bc: 'deauth/disassoc to broadcast', spf: 'unprotected deauth from a PMF-required AP', nb: 'distinct BSSIDs beaconing',
+  nn: 'never-seen BSSIDs', nss: 'distinct SSIDs', ds: 'distinct deauth senders', pd: 'distinct probing devices', sqa: 'sequence-number anomalies',
+  tsj: 'beacon clock went backwards (two radios, one BSSID)', iec: 'beacon fingerprint changed', rx: 'strongest RSSI', ra: 'mean RSSI' };
+const ALARM = new Set(['dea', 'dis', 'bc', 'spf', 'sqa', 'tsj', 'iec', 'nn']);
+const SEC = { OPN: 'Open', WEP: 'WEP', W1: 'WPA', W2: 'WPA2', W3: 'WPA3', W23: 'WPA2/3', ENT: 'Enterprise', OWE: 'Enhanced Open' };
+$('whead').innerHTML = W_COLS.map(c => `<th class="num" title="${esc(W_HELP[c] || c)}">${c}</th>`).join('');
+
+const tip = $('tip');
+function bars(el, values, label) {
+  const max = Math.max(1, ...values);
+  el.innerHTML = values.map((v, i) => `<div style="height:${Math.max(v ? 4 : 1, 100 * v / max)}%" data-tip="${esc(label(i, v))}"></div>`).join('');
+}
+document.addEventListener('mousemove', (e) => {
+  const t = e.target.dataset && e.target.dataset.tip;
+  if (!t) { tip.style.display = 'none'; return; }
+  tip.textContent = t; tip.style.display = 'block';
+  tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY - 28) + 'px';
+});
+$('bychax').innerHTML = Array.from({ length: 13 }, (_, i) => `<span>${i + 1}</span>`).join('');
+
+function age(s) { return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h'; }
+function noteTag(n) {
+  const cls = /^open|^WEP/.test(n) ? 'crit' : /WPA1|no PMF|impostor|fingerprint/.test(n) ? 'warn' : 'info';
+  return `<span class="tag ${cls}">${esc(n)}</span>`;
+}
+
+function render(s) {
+  // header
+  const arms = s.arms || [];
+  $('arms').textContent = arms.length ? arms.map(a => `arm n${a.id} · ${age(a.age)} ago · ${a.windows} windows` + (a.drp ? ` · ${a.drp} drops` : '')).join('  |  ') : 'no arm yet';
+  $('arms').className = 'pill ' + (arms.length && arms.every(a => a.age < 60) ? 'ok' : arms.length ? 'bad' : '');
+  const c = s.counts || {};
+  $('counts').textContent = `A ${c.A || 0} · W ${c.W || 0} · B ${c.B || 0} · E ${c.E || 0} · H ${c.H || 0}`;
+  // deauth strip
+  $('dtotal').textContent = s.deauth.total; $('d60').textContent = s.deauth.last_60s; $('dspf').textContent = s.deauth.spoofed;
+  $('d60').className = s.deauth.last_60s >= 10 ? 'hot' : '';
+  bars($('bych'), s.deauth.by_ch, (i, v) => `channel ${i + 1}: ${v} deauth/disassoc`);
+  const ser = s.deauth.series.slice(-120);
+  bars($('series'), ser.map(x => x[2]), (i, v) => `t=${ser[i][0]}s ch${ser[i][1]}: ${v}`);
+  // APs
+  $('apcount').textContent = `${s.aps.length} seen`;
+  if (s.aps.length) $('aptable').innerHTML = s.aps.map(a => `<tr class="${a.age > 180 ? 'stale' : ''}">
+      <td>${a.hidden ? '<span class="muted">(hidden)</span>' : esc(a.ssid)}</td>
+      <td class="mono muted">${esc(a.bssid.replace(/(..)(?!$)/g, '$1:'))}</td>
+      <td class="num">${esc(a.ch)}</td>
+      <td>${esc(SEC[a.sec] || a.sec)}${a.pmf === 2 ? ' · PMF' : a.pmf === 1 ? ' · PMF opt' : ''}</td>
+      <td class="num">${esc(a.rssi)}</td>
+      <td class="num muted">${age(a.age)}</td>
+      <td>${a.notes.map(noteTag).join('')}</td></tr>`).join('');
+  // windows (newest first)
+  $('wtable').innerHTML = s.windows.slice().reverse().map(w => '<tr>' + W_COLS.map(k =>
+    `<td class="num ${ALARM.has(k) && w[k] > 0 ? 'hot' : ''}">${k === 'arm' ? 'n' + w.arm : w[k]}</td>`).join('') + '</tr>').join('');
+  // events + trackers
+  $('events').innerHTML = s.events.length ? s.events.slice(0, 12).map(e => {
+    const what = e.code === 'DEA' ? `deauth burst on ch${e.ch}: ${e.cnt} frames (${e.rate}/s)` + (e.b ? ` for ${e.b}` : '') + (e.spf ? `, ${e.spf} spoof-suspect` : '')
+      : e.code === 'BSP' ? `beacon spam on ch${e.ch}: ${e.nn} new BSSIDs in one dwell` : e.code;
+    return `<tr><td class="muted">${Math.round(e.t)}s</td><td><span class="tag warn">${esc(e.code)}</span> ${esc(what)} <span class="muted">(n${e.arm})</span></td></tr>`;
+  }).join('') : '<tr><td class="muted">No events.</td></tr>';
+  $('trackers').innerHTML = s.trackers.map(t => `<tr><td class="muted">${age(t.age)}</td><td><span class="tag info">tracker</span> ${esc(t.name)}
+      <span class="mono muted">${esc(t.hash)}</span> RSSI ${esc(t.rssi)} · seen ${t.reports}× <span class="muted">(n${t.arm})</span></td></tr>`).join('');
+}
+
+function addFeed(type, text) {
+  const feed = $('feed'), d = document.createElement('div');
+  d.className = type; d.textContent = text;
+  feed.prepend(d);
+  while (feed.children.length > 200) feed.lastChild.remove();
+}
+
+fetch('/api/airspace').then(r => r.json()).then(render);
+const es = new EventSource('/events');
+es.onmessage = (m) => {
+  const ev = JSON.parse(m.data);
+  if (ev.type === 'airspace') render(ev);
+  else if (ev.type === 'rfpkt') addFeed(ev.raw[0], `${ev.t.toFixed(0).padStart(5)}s ${ev.raw}`);
+  else if (ev.type === 'log') addFeed('L', 'LOG ' + ev.text);
+};
+</script>
+</body>
+</html>

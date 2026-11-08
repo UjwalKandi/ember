@@ -5,20 +5,18 @@ A step-by-step runbook for taking EMBER from a fresh clone to a live demo. Use i
 Every phase ends with a ✅ checklist. Don't move on until it passes.
 
 > **v2 pivot (2026-11-08).** EMBER is becoming a passive wireless-security sensing mesh: ESP32 sensor arms plus a core node over LoRa, with a local SLM analyst. See [OBJECTIVES.md](OBJECTIVES.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
-> - **Still valid:** phases A–B (laptop setup, Hugging Face) and the LLM labs 00–02.
-> - **v1 wildfire only:** phase C (camera/mic bring-up), phases F–G and labs 03–05 (code archived at tag `wildfire-v1`).
+> - **Still valid:** phases A–B (laptop setup, Hugging Face) and phase D, the LLM labs 00–05. Labs 03–05 train on the wildfire agent task, whose code stays in the tree until L3, so you can learn the full SFT → GGUF → eval loop now, in parallel with L0/L1. See the learning track in [labs/README.md](../labs/README.md).
+> - **v1 wildfire only:** phase C (camera/mic bring-up) and phases F–G (code also archived at tag `wildfire-v1`).
 >
-> New phases, one at a time; each gets its own detailed steps here once we start it:
+> **Lean v2 phases** (scope and reasons: [OBJECTIVES.md](OBJECTIVES.md); design: [ARCHITECTURE.md](ARCHITECTURE.md#8-roadmap)). All $0 on hardware you own:
 >
-> | Phase | What | Cost | ✅ Done when |
-> |---|---|---|---|
-> | R0 | objectives, architecture, assessment docs; tag `wildfire-v1` | $0 | docs on GitHub, tests pass |
-> | R1 | one sensor arm over USB: Wi-Fi mgmt-frame + BLE capture | $0 | dashboard lists nearby APs (channel, RSSI, security) and counts deauth frames |
-> | R2 | RF simulator + deterministic engine + eval | $0 | unit tests + engine-vs-baseline table |
-> | R3 | 3 arms + core over time-sliced ESP-NOW; localization | $0 | authorized self-test: your own hotspot cloned as an evil twin is detected and located |
-> | R4 | LoRa transport (4× Wio-SX1262 for XIAO, ~$5–10 each, legal band for your region) | ~$20–40 | same demo over LoRa |
-> | R5–R7 | assistant labs: grounded Q&A (SFT→DPO), policy→config (SFT→GRPO), triage agent | $0 | numbers in LEARNING_LOG |
-> | R8 | write-up + demo video | $0 | published |
+> | Phase | What | ✅ Done when |
+> |---|---|---|
+> | [L0](#phase-r1-one-sensor-arm-over-usb) | scope reset + ship **R1**: one arm over USB, `/airspace`, capture record/replay | on-board R1 checklist below passes |
+> | L1 | RF simulator + engine + response playbook + incident record | engine beats the R1 thresholds; real captures raise no false incidents |
+> | L2 | on-device TinyML attack classifier (the novelty; [Lab 10](../labs/10-tinyml/README.md)) | int8 parity; TinyML vs thresholds table; fits on the arm |
+> | L3 | fine-tuned local incident-report model (labs 02–05, 07, 08 re-targeted) | base vs SFT vs DPO table, 0 invented actions, live report via llama.cpp |
+> | L4 | write-up + demo video | published |
 
 | Phase | What | Time | Can run in parallel with |
 |---|---|---|---|
@@ -30,6 +28,42 @@ Every phase ends with a ✅ checklist. Don't move on until it passes.
 | [G](#phase-g-submission) | Publish + submit | ~30 min | — |
 
 **Run every command from the repo root** (`cd ~/Documents/meta/ember`, or wherever you cloned it) in your own Terminal window.
+
+---
+
+## Phase R1: one sensor arm over USB
+
+**Goal:** one XIAO, listening only, streams what it hears in your airspace to the laptop dashboard. No new hardware; the Sense camera board can stay on or come off. Attach the **antenna** (the arm hears little without it).
+
+### R1.1 Flash and provision
+1. Push to `main` (or run the `firmware` workflow by hand) so GitHub Actions builds the image and updates the flasher. The build is the first compile of the new arm code, so check the run is green.
+2. Open https://ujwalkandi.in/ember/ in Chrome/Edge → **Install EMBER firmware**.
+3. In the [serial console](https://ujwalkandi.in/ember/console.html): **Make arm (v2)** (a fresh board already is one, and boards that only ever had `CFG|id` set also become arms after this flash), then **Set node id** 1.
+4. Expect `LOG|EMBER v2-xxxxxxx role=arm id=1 … wifi=ok ble=ok (listen-only)`, a `W|…` line every 300 ms and `A|…` lines for nearby networks.
+5. **Self-test** → `LOG|selftest PASS`, with `frames=` growing between runs.
+
+### R1.2 Dashboard, live and recorded
+Close the console tab, then:
+```bash
+pip install pyserial
+python3 -m gateway.server --serial /dev/cu.usbmodemXXXX --record captures/home-$(date +%F).log
+# open http://localhost:8080/airspace
+```
+`captures/` is git-ignored: recordings contain your neighbours' network names. They are the authorized real-world data for L1 calibration and L2 training. Replay one (or the synthetic fixture) without a board:
+```bash
+python3 -m gateway.server --replay tests/fixtures/airspace_sample.log --replay-speed 2
+```
+
+### R1.3 Authorized deauth check
+Reboot **your own** router or phone hotspot while the arm listens. Its clients get deauth/disassoc frames, which show up as `dea`/`dis` in the feature windows and in the deauth panel. Never generate deauth frames against networks you don't own.
+
+### ✅ Phase R1 checklist
+- [ ] `TEST` → `selftest PASS` on the arm
+- [ ] `/airspace` lists nearby APs with channel, RSSI and security (your own AP shows the right WPA2/WPA3 and PMF)
+- [ ] the deauth panel counts frames during your own router reboot
+- [ ] live feature windows scroll; `drops` in the header stays at or near 0
+- [ ] a capture recorded and replayed
+- [ ] `python3 -m unittest discover -s tests` passes
 
 ---
 

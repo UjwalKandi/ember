@@ -1,6 +1,16 @@
 # EMBER LLM labs: from running a model to SFT and RL
 
-> **v2 pivot (2026-11-08):** labs 00–02 apply unchanged. Labs 03–08 are being re-targeted from the wildfire decision agent to the v2 assistant roles: grounded incident Q&A (SFT → DPO), policy → config with a verifier reward (GRPO), and a novelty-triage agent. In v2 the LLM never makes the alert decision. See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#6-assistant-local-slm-never-in-the-decision-path).
+> **Learning is a first-class goal of EMBER v2.** Every model in the system is one you train and run locally yourself, and the labs run in parallel with the build, so you never wait on hardware to learn.
+>
+> | When | Lab | What you learn | What it ships in EMBER |
+> |---|---|---|---|
+> | **now** (alongside L0/L1) | [00](00-setup/README.md)–[05](05-export-eval/README.md) | run → bake-off → **LoRA SFT** → merge/convert/quantize → serve locally with llama.cpp → evaluate | the full pipeline, practised on the wildfire agent task (code and data still in the tree; the method is identical for v2) |
+> | L1 | [06](06-eval-science/README.md) | evaluation science: CIs, held-out compositions, error analysis | the engine-vs-baseline table |
+> | **L2** | [10](10-tinyml/README.md) | **supervised training from scratch**, class imbalance, int8 quantization, C inference, parity tests | the on-device attack classifier: the project's novelty |
+> | **L3** | 02–05 re-targeted, [07](07-dpo/README.md), [08](08-grpo/README.md) | distillation with rejection sampling, SFT on a new task, **DPO**, **GRPO** with a checker reward, GGUF serving | the **incident-report model**: writes the report from the incident record; a checker scores faithfulness, coverage and invented actions |
+> | optional | [09](09-edge/README.md) | quantized SLM on a Pi/phone | an offline analyst on edge hardware |
+>
+> The wildfire simulator, agent and dataset builder stay in the tree until L3 re-targets these labs, so labs 03–05 keep working. In v2 the LLM never makes the alert decision ([ARCHITECTURE §6](../docs/ARCHITECTURE.md#6-assistant-local-slm-never-in-the-decision-path)).
 
 A hands-on course built on this repo. You learn by doing real LLM engineering on a real system: a small language model (SLM) that runs on your Mac becomes the brain of the EMBER sensor swarm. You run it, measure it, fine-tune it, ship it back to llama.cpp, and later improve it with preference tuning and reinforcement learning.
 
@@ -28,7 +38,8 @@ llama.cpp is the best tool for running and shipping models on laptops and edge d
 | [06](06-eval-science/README.md) | Evaluation science | seeds, confidence intervals, held-out compositions, error analysis | outline |
 | [07](07-dpo/README.md) | Preference tuning (DPO) | learn from the model's own mistakes | outline |
 | [08](08-grpo/README.md) | RL with verifiable rewards (GRPO) | the simulator scores answers; train with rewards | outline |
-| [09](09-edge/README.md) | Edge deployment | quantized student on a Pi/phone; TinyML on the ESP32 | outline |
+| [09](09-edge/README.md) | Edge deployment | quantized student on a Pi/phone | outline |
+| [10](10-tinyml/README.md) | TinyML from scratch | train the arm's attack classifier, int8-quantize it, run it on the ESP32 (L2) | outline |
 
 ## How the labs build on each other
 ```
@@ -36,6 +47,7 @@ llama.cpp is the best tool for running and shipping models on laptops and edge d
                  (ship half)    (data half)     (choose model)  (train half)  (close the loop) ├─► 07 DPO
                                                                                            ├─► 08 GRPO
                                                                                            └─► 09 edge
+R1 captures + L1 simulator ─► 10 TinyML (train from scratch → int8 → ESP32)
 ```
 - Lab 01 teaches the shipping tools you reuse in 03 and 05.
 - Lab 02 explains what the trainer in 04 actually feeds the model.
@@ -57,6 +69,7 @@ Tick these off in [docs/LEARNING_LOG.md](../docs/LEARNING_LOG.md) as you go.
 - [ ] Build preference pairs and run DPO (07)
 - [ ] Write a verifiable reward and run GRPO; recognize reward hacking (08)
 - [ ] Deploy a quantized model on an edge device (09)
+- [ ] Build a leak-free dataset, train a classifier from scratch, int8-quantize it and prove C/Python parity on a microcontroller (10)
 
 ## How to work through a lab
 1. Read **Concepts** first. Each lab explains *why* before *how*.
