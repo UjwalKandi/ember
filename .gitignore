@@ -12,3 +12,7 @@ site/firmware/*.bin
 ember-lora/
 ember-lora-ckpt/
 data-small/
+models/
+runs/
+results/logs/
+results/bakeoff-*.json

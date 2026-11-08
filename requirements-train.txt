@@ -1,0 +1,12 @@
+# Training / lab dependencies (all free, open source). Install into the project venv:
+#   pip install -r requirements-train.txt
+torch>=2.4            # PyTorch with Apple GPU (MPS) support
+transformers>=4.56
+peft>=0.17            # LoRA adapters
+accelerate>=1.0
+trl>=0.23             # SFT / DPO / GRPO trainers (Labs 07-08)
+datasets>=3.0
+matplotlib>=3.8       # loss curves
+sentencepiece
+protobuf
+# Kaggle / NVIDIA only (QLoRA): bitsandbytes

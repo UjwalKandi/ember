@@ -1,6 +1,6 @@
 # Demo script (target 2.5 min)
 
-**Setup before judging:** 3 flashed nodes plus the gateway XIAO on USB. The EMBER endpoint on Modal is warm (hit it once ~5 min before). Run:
+**Setup before judging:** 3 flashed nodes plus the gateway XIAO on USB. The local model server is running (`scripts/serve_gguf.sh <model>`) and has answered one request. Run:
 `python3 -m gateway.server --serial <port> --nodes config/nodes.json --sim quiet --agent llm --auto --show-truth`
 
 1. **Hook (15 s).** "Wildfire sensor networks already exist, and they detect. EMBER investigates. A fine-tuned Muse Glimmer questions $15 camera nodes over a long-range mesh, pays for every question in radio airtime, and re-programs the sensors when they're wrong."
@@ -11,4 +11,4 @@
    Then point at the airtime gauge: "Every question costs LoRa airtime under a 1% duty cycle. The fine-tuned model learned when a question is worth asking." Show the README table: base vs EMBER vs rules (accuracy under tight airtime, false-alarm events after acting).
 6. **Close (15 s).** "Swap ESP-NOW for LoRa and it's a real Meshtastic network; nothing above the radio changes. Everything you saw was built during the hackathon."
 
-**Fallbacks:** if hardware misbehaves, run without `--serial` (all nodes simulated). If Modal is slow, use `--agent heuristic` and show the recorded LLM trace or video.
+**Fallbacks:** if hardware misbehaves, run without `--serial` (all nodes simulated). If the local model is slow, use `--agent heuristic` and show the recorded LLM trace or video.

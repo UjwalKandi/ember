@@ -238,8 +238,8 @@ class FreePathTests(unittest.TestCase):
         events = [l for l in row["messages"][1]["content"].splitlines() if l.startswith("T-")]
         self.assertLessEqual(len(events), 5)
 
-    def test_kaggle_label_mask_covers_only_assistant_turns(self):
-        from training.kaggle_qlora import build_example
+    def test_label_mask_covers_only_assistant_turns(self):
+        from training.sft_data import build_example
 
         class CharTok:
             """Toy tokenizer: one token per character, template = role-tagged lines."""
@@ -259,6 +259,57 @@ class FreePathTests(unittest.TestCase):
         self.assertIn("EMBER SITREP", trained)
         self.assertLess(len(trained), len(text))
         self.assertIsNone(build_example(CharTok(), row, max_len=10))     # too long -> dropped
+
+
+class LabToolingTests(unittest.TestCase):
+    def test_text_fallback_for_templates_without_tools(self):
+        from training.sft_data import build_example, prepare
+
+        class NoToolsTok:
+            def apply_chat_template(self, msgs, tools=None, tokenize=False):
+                if tools is not None or any(m["role"] == "tool" or m.get("tool_calls") for m in msgs):
+                    raise ValueError("this template has no tool support")
+                return "".join(f"<{m['role']}>{m['content']}\n" for m in msgs)
+
+            def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
+                return {"input_ids": [ord(c) for c in text], "offset_mapping": [(i, i + 1) for i in range(len(text))]}
+
+        row = trajectory(make_episode("sun_glare", 3), random.Random(0))
+        msgs, tools, mode = prepare(NoToolsTok(), row)
+        self.assertEqual(mode, "text")
+        self.assertIsNone(tools)
+        self.assertIn("Tools you can call", msgs[0]["content"])
+        self.assertTrue(any("<tool_call>" in m["content"] for m in msgs if m["role"] == "assistant"))
+        ex = build_example(NoToolsTok(), row, max_len=100_000)
+        trained = "".join(chr(t) for t, l in zip(ex["input_ids"], ex["labels"]) if l != -100)
+        self.assertIn("<tool_call>", trained)
+        self.assertNotIn("[tool result", trained)
+
+    def test_text_tool_call_parser(self):
+        from gateway.llm import parse_text_calls
+        text, calls = parse_text_calls('thinking done <tool_call>{"name": "ping_node", "arguments": {"node_id": 4}}</tool_call>')
+        self.assertEqual([(c["function"]["name"], c["function"]["arguments"]) for c in calls], [("ping_node", {"node_id": 4})])
+        self.assertEqual(text, "thinking done")
+
+    def test_bakeoff_config_is_complete(self):
+        cfg = json.load(open(Path(__file__).resolve().parents[1] / "config" / "models.json"))
+        names = [m["name"] for m in cfg["models"]]
+        self.assertEqual(len(names), len(set(names)))
+        for m in cfg["models"]:
+            for key in ("name", "size_b", "license", "gguf", "hf", "request_extra", "notes"):
+                self.assertIn(key, m, m.get("name"))
+            self.assertIn(":", m["gguf"], m["name"])      # hf-repo:quant for llama-server -hf
+        self.assertTrue({"twil-lm3", "twil-8b", "qwen3-1.7b"} <= set(names))
+
+    def test_failure_taxonomy(self):
+        from training.eval import failure_type
+        base = {"error": None, "valid": False, "verdict_ok": False, "cause_ok": False}
+        self.assertEqual(failure_type({**base, "valid": True, "verdict_ok": True, "cause_ok": True}, {}), "ok")
+        self.assertEqual(failure_type({**base, "valid": True}, {}), "wrong_decision")
+        self.assertEqual(failure_type(base, {"stats": {"turn_limit": True}}), "turn_limit")
+        self.assertEqual(failure_type(base, {"stats": {"unknown_tools": 2}}), "bad_tool_calls")
+        self.assertEqual(failure_type(base, {"stats": {}}), "no_assessment")
+        self.assertEqual(failure_type({**base, "error": "Timeout"}, {}), "crash/timeout")
 
 
 if __name__ == "__main__":

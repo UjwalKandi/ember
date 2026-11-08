@@ -19,6 +19,24 @@ _INVOKE = re.compile(r'<atem:invoke name="([^"]+)">(.*?)</atem:invoke>', re.S)
 _PARAM = re.compile(r'<atem:parameter name="([^"]+)">(.*?)</atem:parameter>', re.S)
 
 
+_TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
+
+
+def parse_text_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Recover <tool_call>{"name":..,"arguments":{..}}</tool_call> blocks written as plain text
+    (Hermes/Qwen style, and EMBER's fallback format for templates without tool support)."""
+    calls = []
+    for blob in _TOOL_CALL.findall(text):
+        try:
+            obj = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "name" in obj:
+            calls.append({"id": f"call_{uuid.uuid4().hex[:8]}", "type": "function",
+                          "function": {"name": obj["name"], "arguments": obj.get("arguments") or {}}})
+    return (_TOOL_CALL.sub("", text).strip() if calls else text), calls
+
+
 def parse_atem(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     """Return (content_without_calls, tool_calls) from raw Muse Glimmer output."""
     if "<atem:invoke" not in text:
@@ -80,10 +98,18 @@ class ChatClient:
                     args = {"_raw": args}
             calls.append({"id": c.get("id") or f"call_{uuid.uuid4().hex[:8]}", "type": "function",
                           "function": {"name": c["function"]["name"], "arguments": args}})
-        if not calls:
-            content, calls = parse_atem(content)
-        return {"content": content, "tool_calls": calls,
-                "reasoning": msg.get("reasoning_content") or msg.get("reasoning")}
+        fallback = False
+        if not calls:   # server didn't parse tool calls: try the text formats ourselves
+            for parser in (parse_atem, parse_text_calls):
+                content, calls = parser(content)
+                if calls:
+                    fallback = True
+                    break
+        t = data.get("timings") or {}   # llama.cpp reports generation speed per request
+        return {"content": content, "tool_calls": calls, "fallback": fallback,
+                "reasoning": msg.get("reasoning_content") or msg.get("reasoning"),
+                "gen_tokens": t.get("predicted_n") or (data.get("usage") or {}).get("completion_tokens"),
+                "tok_per_s": t.get("predicted_per_second")}
 
     def _post(self, body: Dict[str, Any]) -> Dict[str, Any]:
         req = urllib.request.Request(

@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 import random
+from collections import Counter
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -54,12 +55,29 @@ def run_one(spec: Dict[str, Any], args) -> Dict[str, Any]:
     except Exception as e:   # count crashes/timeouts as failures, keep going
         out, err = {"assessment": ep.tools.assessment, "report": "", "steps": 0}, repr(e)
     row = score(ep, out, err)
+    row["failure"] = failure_type(row, out)
+    row["seconds"] = out.get("seconds")
+    row.update({k: v for k, v in (out.get("stats") or {}).items()})
     row["budget"] = ep.budget
     row["airtime_s"] = round((ep.swarm.airtime_used_ms() - air0) / 1000, 2)
     if ep.truth.cause not in ("wildfire", "campfire"):
         row["spurious_act"] = spurious_after(ep)
         row["spurious_ctrl"] = spurious_after(make_episode(spec["scenario"], spec["seed"], ep.budget))
     return row
+
+
+def failure_type(row: Dict[str, Any], out: Dict[str, Any]) -> str:
+    """One label per episode, so model comparisons say *why* a model fails (Lab 03/06)."""
+    st = out.get("stats") or {}
+    if row.get("error"):
+        return "crash/timeout"
+    if row["valid"]:
+        return "ok" if row["verdict_ok"] and row["cause_ok"] else "wrong_decision"
+    if st.get("turn_limit"):
+        return "turn_limit"
+    if st.get("unknown_tools") or st.get("tool_errors"):
+        return "bad_tool_calls"
+    return "no_assessment"   # answered in prose / never called submit_assessment
 
 
 def score(ep, out: Dict[str, Any], err) -> Dict[str, Any]:
@@ -119,6 +137,10 @@ def summarize(rows: List[Dict[str, Any]], holdout=()) -> Dict[str, Any]:
         "loc_err_m_median": sorted(locs)[len(locs) // 2] if locs else None,
         "unreliable_f1": round(sum(r["unrel_f1"] for r in rows) / n, 3),
         "avg_tool_calls": round(sum(r["tool_calls"] for r in rows) / n, 2),
+        "failures": dict(sorted(Counter(r.get("failure", "ok") for r in rows).items())),
+        "sec_per_episode": round(sum(r.get("seconds") or 0 for r in rows) / n, 1),
+        "fallback_parse_rate": round(sum(bool(r.get("fallback_parses")) for r in rows) / n, 3),
+        "tok_per_s": (lambda v: round(sum(v) / len(v), 1) if v else None)([r["tok_per_s"] for r in rows if r.get("tok_per_s")]),
         "tight_budget_acc": _acc([r for r in rows if r.get("budget") in ("tight", "exhausted")]),
         "airtime_s_per_episode": round(sum(r.get("airtime_s", 0) for r in rows) / n, 2),
         "correct_per_airtime_s": round(sum(r["verdict_ok"] and r["cause_ok"] for r in rows)
@@ -134,7 +156,8 @@ def report(paths: List[str]) -> None:
     res = [json.load(open(p)) for p in paths]
     keys = ["valid_assessment", "verdict_acc", "cause_acc", "false_alarm_rate", "miss_rate",
             "loc_err_m_median", "unreliable_f1", "unseen_composition_acc", "tight_budget_acc",
-            "airtime_s_per_episode", "correct_per_airtime_s", "spurious_event_reduction", "avg_tool_calls"]
+            "airtime_s_per_episode", "correct_per_airtime_s", "spurious_event_reduction", "avg_tool_calls",
+            "failures", "fallback_parse_rate", "sec_per_episode", "tok_per_s"]
     print("| metric | " + " | ".join(r["name"] for r in res) + " |")
     print("|---|" + "---|" * len(res))
     for k in keys:

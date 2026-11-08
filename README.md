@@ -31,7 +31,7 @@ EMBER is an **agentic sensor mesh**. Cheap XIAO ESP32-S3 Sense nodes (camera + m
   E|n3|s42|FLM|c81|hz34|snd12                                           │   tools: confirm / ping / history /
   C|*|q9|SET|rebase1   ◄── edge re-programming ──────────────────────── │          tune_detectors / alert
                                                                         ▼
-                                                           Muse Glimmer (fine-tuned, vLLM on Modal)
+                                                           local SLM agent (llama.cpp; LoRA fine-tuned)
                                                            → airtime-priced tool calls over the mesh
                                                            → submit_assessment + SITREP
 ```
@@ -47,8 +47,8 @@ EMBER is an **agentic sensor mesh**. Cheap XIAO ESP32-S3 Sense nodes (camera + m
 | simulate | 14 scenarios (wildfire variants, campfire, sun glare, vehicle, dusty road, fog, fire-in-fog, stuck sensor, dying node, …) on random node grids with wind, packet loss and multi-hop | `gateway/sim.py` |
 | label | ground truth from the simulator; airtime-priced, value-of-information tool-use skeleton from an observation-only policy; edge re-programming actions | `training/gen_data.py` |
 | format | OpenAI `messages`, one tool call per assistant message (Muse Glimmer's format), arguments as dicts, + tool schemas; ~2.4k trajectories | `data/*.jsonl` |
-| train | QLoRA (cookbook hyperparameters, assistant-only loss) on Kaggle's free 2×T4; optional paid path: Axolotl on Modal H100 | `training/kaggle_qlora.py`, `training/modal_app.py` |
-| serve | llama.cpp on the laptop (Muse Glimmer GGUF + LoRA adapter GGUF, upstream ATEM tool parser); optional: vLLM | `scripts/run_local_model.sh`, `scripts/lora_to_gguf.sh` |
+| train | LoRA SFT with assistant-only loss: PEFT on the Mac (MPS, ≤4B) or free Kaggle QLoRA (7–8B) | `training/sft_lora.py`, `training/sft_data.py` |
+| serve | llama.cpp on the laptop: merged or LoRA GGUF, quantized, OpenAI-compatible server | `training/export_gguf.sh`, `scripts/serve_gguf.sh` |
 | evaluate | 420 held-out episodes: verdict/cause accuracy, false alarms, misses, localization, node-health F1, accuracy under tight airtime, false-alarm events in the 5 min after acting (vs a no-action replay of the same seed) | `training/eval.py` |
 
 ### Results (held-out, 420 episodes; 1/3 under tight or exhausted airtime budgets)
@@ -83,13 +83,13 @@ pip install pyserial
 python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet --auto
 #    ids marked "real" in config/nodes.json are hardware; the rest are simulated alongside them
 
-# 3. Use Muse Glimmer instead of the rule-based baseline (free, local llama.cpp on Apple silicon)
-scripts/run_local_model.sh                                        # serves the 17 GB GGUF on :8081
-EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}' \
-  python3 -m gateway.server --sim fog --agent llm
+# 3. Run a small local model as the agent (free: llama.cpp on the Mac's GPU)
+scripts/serve_gguf.sh Qwen/Qwen3-1.7B-GGUF:Q8_0                    # OpenAI-compatible API on :8081
+EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_MODEL=local \
+  EMBER_LLM_EXTRA='{"chat_template_kwargs":{"enable_thinking":false}}' python3 -m gateway.server --sim fog --agent llm
 
-# 4. Evaluate, and fine-tune for free on Kaggle (training/KAGGLE.md)
-python3 -m training.eval --agent llm --url http://localhost:8081/v1 --model muse-glimmer --limit 2 --workers 1 --name base-local
+# 4. Learn SFT/RL on it: bake-off -> LoRA fine-tune -> export -> eval (labs/README.md)
+python3 training/bakeoff.py --models qwen3-0.6b,qwen3-1.7b,twil-lm3 --limit 1
 
 # tests
 python3 -m unittest discover -s tests -v
@@ -101,12 +101,14 @@ python3 -m unittest discover -s tests -v
 protocol/SPEC.md        Ember Link Protocol: frame, packet grammar, serial bridge
 firmware/               XIAO ESP32-S3 Sense: one image, runtime role/id, ESP-NOW flood mesh, flicker-gated flame + haze + mic detectors, USB console
 gateway/                command center: protocol, sim, swarm state, tools, agent loop, dashboard server
-training/               dataset builder, Modal QLoRA + vLLM app, evaluation harness
+training/               dataset builder, LoRA/QLoRA trainer, export to GGUF, bake-off, evaluation harness
 config/nodes*.json      demo node layouts (real + virtual; nodes-single.json for one board)
 site/                   browser flasher (ESP Web Tools) + Web Serial console, served on GitHub Pages
 .github/workflows/      firmware cloud build → merged image → Pages deploy
 docs/                   SETUP_GUIDE (runbook), PROJECT_ASSESSMENT ($0 plan), HARDWARE_BRINGUP (test log), demo-script
-scripts/                run_local_model.sh (llama.cpp server), lora_to_gguf.sh (adapter → GGUF)
+scripts/                serve_gguf.sh (llama.cpp server), cleanup_modal.sh / cleanup_local.sh
+labs/                   hands-on curriculum: llama.cpp, templates, bake-off, LoRA SFT, export (→ DPO, GRPO, edge)
+config/models.json      bake-off model candidates (Qwen3, Llama 3.2, Gemma 3, SmolLM3, webAI TwIL, Muse Glimmer)
 tests/                  stdlib unittest suite
 ```
 
@@ -116,7 +118,7 @@ Everything in this repository was written during the Meta AI Developer Hackathon
 
 Prior work and third-party material:
 - **[A.I.D.E](https://github.com/UjwalKandi/A.I.D.E)** (the author's earlier project, on-device log diagnostics) inspired the "local model writes the diagnostic report" idea. **No code is reused.**
-- The QLoRA hyperparameters are the Muse Glimmer cookbook's Axolotl config ([meta-models/meta-oss-cookbook](https://github.com/meta-models/meta-oss-cookbook), Apache-2.0), loaded at train time and overridden for EMBER. The vLLM flags follow the cookbook's `inference-server/vllm.md`.
+- During the hackathon, the training/serving setup followed the Muse Glimmer cookbook ([meta-models/meta-oss-cookbook](https://github.com/meta-models/meta-oss-cookbook), Apache-2.0). After the event the paid Modal/vLLM path was removed in favour of free local training (PEFT) and llama.cpp serving.
 - All training data is synthetic, generated by `gateway/sim.py`.
 
 ## License

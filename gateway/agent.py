@@ -26,14 +26,22 @@ class GlimmerAgent:
             {"role": "user", "content": user_prompt(self.swarm.context())},
         ]
         report, n_calls, t0, nudged = "", 0, time.time(), False
+        # what went wrong / how fast: used by the eval's failure taxonomy (Lab 03/06)
+        stats = {"turns": 0, "nudged": False, "fallback_parses": 0, "tool_errors": 0, "unknown_tools": 0,
+                 "turn_limit": False, "gen_tokens": 0, "tok_per_s": []}
         for turn in range(self.max_turns):
             out = self.client.chat(messages, tools=TOOL_SCHEMAS)
+            stats["turns"] += 1
+            stats["fallback_parses"] += int(bool(out.get("fallback")))
+            stats["gen_tokens"] += out.get("gen_tokens") or 0
+            if out.get("tok_per_s"):
+                stats["tok_per_s"].append(out["tok_per_s"])
             if out.get("reasoning"):
                 emit({"kind": "thought", "text": out["reasoning"]})
             calls = out["tool_calls"]
             if not calls:
                 if self.tools.assessment is None and not nudged:
-                    nudged = True   # answered without submitting: ask once for the structured call
+                    nudged = stats["nudged"] = True   # answered without submitting: ask once for the structured call
                     messages.append({"role": "assistant", "content": out["content"] or ""})
                     messages.append({"role": "user", "content": "Call submit_assessment now, then write the SITREP."})
                     continue
@@ -45,13 +53,18 @@ class GlimmerAgent:
                 emit({"kind": "call", "name": name, "args": args})
                 result = self.tools.call(name, args)
                 n_calls += 1
+                if result.startswith('{"error"'):
+                    stats["unknown_tools" if "unknown tool" in result else "tool_errors"] += 1
                 emit({"kind": "result", "name": name, "result": result})
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         else:
             report = "(agent hit the turn limit before writing a report)"
+            stats["turn_limit"] = True
         emit({"kind": "report", "text": report})
+        tps = stats.pop("tok_per_s")
+        stats["tok_per_s"] = round(sum(tps) / len(tps), 1) if tps else None
         return {"assessment": self.tools.assessment, "report": report, "steps": n_calls,
-                "seconds": round(time.time() - t0, 1), "messages": messages}
+                "seconds": round(time.time() - t0, 1), "messages": messages, "stats": stats}
 
 
 def dump_trace(result: Dict[str, Any]) -> str:

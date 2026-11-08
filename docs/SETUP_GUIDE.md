@@ -7,10 +7,9 @@ Every phase ends with a ✅ checklist. Don't move on until it passes.
 | Phase | What | Time | Can run in parallel with |
 |---|---|---|---|
 | [A](#phase-a-laptop-setup) | Laptop setup | ~20 min | — |
-| [B](#phase-b-accounts-secrets-model-download) | Accounts, secrets, 60 GB model download | ~15 min + download | C |
+| [B](#phase-b-hugging-face-account-free) | Hugging Face account + token | ~10 min | C |
 | [C](#phase-c-hardware) | Browser-flash + bring up ONE board, then replicate | ~1.5–2 h | B, D |
-| [D](#phase-d-run-muse-glimmer-locally-free) | Run Muse Glimmer locally (llama.cpp) + evaluate | ~1 h + overnight eval | C |
-| [E](#phase-e-fine-tune-for-free-kaggle-and-run-the-adapter-locally) | Free fine-tune on Kaggle, adapter runs locally | ~1 day (mostly waiting) | — |
+| [D](#phase-d-llm-engineering-labs-inference--sft--rl) | LLM labs: llama.cpp, templates, bake-off, LoRA SFT, export (→ DPO/RL next) | days, at your pace | C |
 | [F](#phase-f-demo-prep) | Demo rehearsal | ~1–2 h | — |
 | [G](#phase-g-submission) | Publish + submit | ~30 min | — |
 
@@ -29,33 +28,21 @@ ls
 ```
 ✅ You see `README.md config docs firmware gateway protocol results tests training`.
 
-### A2. Install the tools (use Python 3.12 in a project venv)
-The macOS system Python (3.9) is too old for current Modal releases: pip stops at modal 1.2.6, which fails with `supports the following image builder versions ... You are using '2026.10'`. Use Python 3.12 in a project venv:
+### A2. Install the tools (Python 3.12 in a project venv)
+The macOS system Python (3.9) is too old for current ML tooling, so use Python 3.12 in a project venv:
 ```bash
-brew install python@3.12            # or the macOS installer from python.org/downloads
+brew install python@3.12 llama.cpp     # or the macOS installer from python.org/downloads
 python3.12 -m venv .venv
-source .venv/bin/activate           # do this in every new Terminal window (prompt shows "(.venv)")
+source .venv/bin/activate              # do this in every new Terminal window (prompt shows "(.venv)")
 pip install --upgrade pip
-pip install modal pyserial platformio
-modal --version
-pio --version
+pip install -r requirements.txt platformio          # dashboard + hardware + local firmware builds
+pip install -r requirements-train.txt               # PyTorch, transformers, PEFT, TRL (for the labs)
+python --version && pio --version && llama-server --version
 ```
-✅ Both print a version, and modal is newer than 1.2.6. `.venv/` is git-ignored. On macOS, `pip` alone may be "command not found" outside the venv; use `python3 -m pip`.
-- Can't upgrade right now? Fallback: Modal dashboard → **Settings → Image Config** → image builder version `2025.06`.
-- **Still the same error inside `(.venv)`?** Check the traceback paths: if they show `Library/Python/3.9`, an old global modal is shadowing the venv. Fix:
-  ```bash
-  deactivate; python3 -m pip uninstall -y modal
-  sed -i '' '/Library\/Python\/3.9\/bin/d' ~/.zshrc     # drop an old PATH line, if you added one
-  rm -rf .venv && python3.12 -m venv .venv && source .venv/bin/activate
-  python --version                                     # must be 3.12.x
-  python -m pip install modal pyserial platformio
-  ```
-  Then prefer `python -m modal ...` over a bare `modal ...`, so the venv's copy is always used.
-
-- A `NotOpenSSLWarning ... LibreSSL` message is harmless (macOS system Python). To hide it:
-  `echo 'export PYTHONWARNINGS="ignore::Warning:urllib3"' >> ~/.zshrc && source ~/.zshrc`
-- `command not found`: run `python3 -m site --user-base` and add `<that path>/bin` to `PATH`.
-- `No matching distribution found for modal`: install a newer Python (`brew install python@3.12`) and use `python3.12 -m pip ...`.
+✅ Python 3.12.x, a PlatformIO version, and a llama.cpp build number. `.venv/` is git-ignored.
+- On macOS, `pip` alone may be "command not found" outside the venv; use `python3 -m pip`.
+- If a traceback shows `Library/Python/3.9`, an old global install is shadowing the venv: run `scripts/cleanup_local.sh`, then re-activate.
+- A `NotOpenSSLWarning ... LibreSSL` message is harmless (macOS system Python only).
 
 ### A3. Git identity (so GitHub credits you)
 ```bash
@@ -89,55 +76,27 @@ Open **http://localhost:8080**.
 - Click the map to start a fire anywhere. Press **Ctrl+C** in Terminal to stop.
 
 ### ✅ Phase A checklist
-- [ ] `modal` and `pio` print versions
+- [ ] `python`, `pio` and `llama-server` print versions
 - [ ] git author is your GitHub email
 - [ ] tests OK
 - [ ] dashboard loads and shows an ALERT for the wildfire scenario
 
 ---
 
-## Phase B: Accounts, secrets, model download
+## Phase B: Hugging Face account (free)
 
-> **Free path (2026-11-05):** only the Hugging Face token (B1) is needed. Modal (B2–B4) is optional and paid; see [PROJECT_ASSESSMENT.md](PROJECT_ASSESSMENT.md).
+Everything runs on free, open-source tools (see [PROJECT_ASSESSMENT.md](PROJECT_ASSESSMENT.md)). You only need a Hugging Face account and token, used to download models; gated ones like Llama and Gemma need you to accept their license once on the model page. The earlier Modal setup was removed; if you created anything there, run `scripts/cleanup_modal.sh` ([labs/00-setup](../labs/00-setup/README.md)).
 
 ### B1. Hugging Face access
 1. Sign in at https://huggingface.co and open https://huggingface.co/meta-models/Muse-Glimmer-30B.
-2. If there's a license or access form, accept it and wait for approval (the page will say you have access). As of 2026-11-03 the model is **Apache-2.0 and not gated**: there's no form, and you only need a token.
+2. If there's a license or access form, accept it and wait for approval (the page will say you have access). Many small models (Qwen3, SmolLM3) are ungated. For gated ones (Llama 3.2, Gemma), click "Agree" on the model page once.
 3. Create a token: profile picture → **Settings → Access Tokens → Create new token**, type **Read**, name `ember`. Copy it (starts with `hf_`).
 
-### B2. Modal account
-1. Sign up at https://modal.com and add a payment method in **Settings → Billing**. GPU time (H100) is billed per second; check current pricing and your credits.
-2. Connect the CLI; this opens a browser tab to approve:
-   ```bash
-   modal setup
-   ```
-   ✅ Terminal says the token was verified and saved.
-
-### B3. Create the two secrets
-```bash
-modal secret create huggingface HF_TOKEN=hf_paste_your_token_here
-export EMBER_LLM_KEY=$(openssl rand -hex 16)
-modal secret create ember-llm EMBER_LLM_KEY=$EMBER_LLM_KEY
-echo $EMBER_LLM_KEY        # save this somewhere safe (password manager); needed in Phases E/F
-```
-✅ `modal secret list` shows `huggingface` and `ember-llm`.
-
-### B4. Start the model download (~60 GB, the longest step; start it early)
-```bash
-modal run training/modal_app.py::download
-```
-- Runs on Modal's servers, not your laptop. Keep the Terminal open until it finishes (or add `--detach` after `run` to let it continue if you close the terminal).
-- ✅ Ends with `weights at /root/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B/snapshots/...`
-- Check the volume: `modal volume ls ember-hf-cache hub`
-- `401` / `403` / `GatedRepoError`: your HF access isn't approved yet, or the secret holds the wrong token (re-run `modal secret create huggingface ... --force`).
-- `Revision not found`: the pinned revision in `training/modal_app.py` (`BASE_REVISION`) changed upstream. Update it to the one in the cookbook's Axolotl configs.
+Then log in locally so downloads use the token: `huggingface-cli login` (paste the token).
 
 ### ✅ Phase B checklist
-- [ ] HF access approved, token created
-- [ ] `modal setup` done, both secrets exist
-- [ ] download finished (or running) without auth errors
-
----
+- [ ] HF token created and `huggingface-cli login` done
+- [ ] licenses accepted for any gated models you want to try
 
 ## Phase C: Hardware
 
@@ -244,152 +203,28 @@ If the port is missing or it can't connect: try another cable or USB port. Or ho
 - [ ] radio + relay tests pass
 - [ ] `config/nodes.json` positions updated
 
-## Phase D: Run Muse Glimmer locally (free)
+## Phase D: LLM engineering labs (inference → SFT → RL)
 
-Everything here is free and open source. See [PROJECT_ASSESSMENT.md](PROJECT_ASSESSMENT.md) for why Modal and vLLM were dropped.
+From here, EMBER is a hands-on lab for learning to run, fine-tune and deploy small language models locally, then build agents around them. Follow **[labs/README.md](../labs/README.md)**:
 
-### D1. Local model server (llama.cpp, Metal)
-1. Install llama.cpp. You need a recent build; Muse Glimmer support landed in b10355:
-   ```bash
-   brew install llama.cpp        # or: brew upgrade llama.cpp
-   llama-server --version
-   ```
-2. On a 24 GB Mac, let the GPU use more memory (resets on reboot), and quit heavy apps like extra Chrome tabs:
-   ```bash
-   sudo sysctl iogpu.wired_limit_mb=20480
-   ```
-3. Start the server. The first run downloads the ~17 GB GGUF from Hugging Face:
-   ```bash
-   cd ~/Documents/meta/ember
-   scripts/run_local_model.sh
-   ```
-   ✅ The log shows the model loading with layers offloaded to Metal, then `server is listening on http://127.0.0.1:8081`.
-   ❌ Out of memory: close apps and retry, or try `EMBER_QUANT=Q4_K_M scripts/run_local_model.sh`.
-4. Smoke test, in a second terminal:
-   ```bash
-   curl -s http://localhost:8081/v1/models
-   curl -s http://localhost:8081/v1/chat/completions -H 'Content-Type: application/json' \
-     -d '{"model":"muse-glimmer","messages":[{"role":"user","content":"Say hi in 5 words"}],"max_tokens":800,"chat_template_kwargs":{"reasoning_strength":"low"}}'
-   ```
-   ✅ JSON with a short answer in `choices[0].message.content`.
+| Lab | You learn | Main tools |
+|---|---|---|
+| 00 | clean $0 setup | cleanup scripts, `requirements-train.txt`, `brew install llama.cpp` |
+| 01 | GGUF, quantization, speed vs quality | llama.cpp `convert_hf_to_gguf.py`, `llama-quantize`, `llama-bench`, `llama-perplexity`, `llama-server` |
+| 02 | tokenizers, chat templates, loss masking | `training/inspect_templates.py`, `training/sft_lora.py --dry-run` |
+| 03 | agents + choosing a model with evals | `training/bakeoff.py` (Qwen3, Llama 3.2, Gemma 3, SmolLM3, webAI TwIL-LM3/8B, Muse Glimmer) |
+| 04 | supervised fine-tuning with LoRA | `training/sft_lora.py` (Mac MPS ≤4B; Kaggle `--qlora` for 7–8B: [training/KAGGLE.md](../training/KAGGLE.md)) |
+| 05 | merge, export, quantize, evaluate | `training/export_gguf.sh`, `scripts/serve_gguf.sh`, `training/eval.py` |
+| 06–09 | eval science, DPO, GRPO (RL), edge deployment | coming next |
 
-### D2. Muse Glimmer runs the dashboard
-```bash
-cd ~/Documents/meta/ember && source .venv/bin/activate
-export EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_MODEL=muse-glimmer
-export EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}'
-python -m gateway.server --sim fog --agent llm --auto --show-truth
-```
-✅ The header says **agent: Muse Glimmer**. **Assess now** produces real tool calls from the model in the trace panel; each turn takes tens of seconds on a laptop. Add `--serial … --nodes config/nodes.json` to include the real boards.
-
-### D3. Evaluate base Muse Glimmer (overnight-scale)
-```bash
-python -m training.eval --agent llm --url http://localhost:8081/v1 --model muse-glimmer \
-    --limit 2 --workers 1 --name base-local
-python -m training.eval --report results/heuristic.json results/base-local.json results/oracle.json
-```
-`--limit 2` means 2 episodes per scenario (28 total). Put the numbers in the README "Muse Glimmer (base)" column, noting the reduced set.
-
-## Phase E: Fine-tune for free (Kaggle) and run the adapter locally
-
-Full steps: **[training/KAGGLE.md](../training/KAGGLE.md)**. Summary:
-1. `python -m training.gen_data --per-scenario 60 --max-examples 600 --max-events 25 --out data-small`
-2. `python training/kaggle_qlora.py --dry-run --data data-small/train.jsonl` (checks lengths and label masks, no GPU)
-3. Kaggle notebook, GPU T4 x2: run `kaggle_qlora.py` (smoke test with `--max-steps 4`, then the full run), and download `ember-lora/`
-4. `scripts/lora_to_gguf.sh ./ember-lora ember-lora.gguf`, then `scripts/run_local_model.sh --lora ember-lora.gguf`
-5. Same eval command with `--name ember-local`, then `--report … results/ember-local.json`
-
-<details>
-<summary>Optional paid path (Modal H100 + vLLM), not used</summary>
-
-### Modal training
-
-### D1. Build the training data (local; `data/` is not in git)
-```bash
-python3 -m training.gen_data --out data
-```
-✅ `train=2280 val=120 eval=420` plus a class/budget breakdown. Re-run this whenever `gateway/` logic changes; the Modal image packs whatever is in `data/`.
-
-### D2. Smoke run (~15–30 min incl. first image build)
-```bash
-modal run training/modal_app.py::train --smoke
-```
-Read the output and check **all four**:
-1. **Rendered example:** tool definitions appear near the top, and each tool call sits in its **own** assistant message.
-2. `tokens/example p50=… p95=… max=…`: **max must be < 8192**.
-3. `ELP vs JSON telemetry, Muse Glimmer tokens: … (N.NNx fewer with ELP)`: copy N.NN into the README "What's new" table.
-4. `=== K trained spans ===`: roughly one span per assistant message, including the tool-call ones (not just the final report).
-
-If any check fails or the run crashes, save the full log; the fix goes in `_ember_config` / `gen_data.py` before the full run.
-
-### D3. Full run (~1–2 h on 1×H100)
-```bash
-modal run --detach training/modal_app.py::train
-```
-Watch progress at https://modal.com/apps (app `ember` → `train` → logs). Loss should fall steadily; eval loss runs at epoch end.
-
-### D4. Merge the adapter into the base model
-```bash
-modal run training/modal_app.py::merge
-```
-✅ Ends with `merged checkpoint at /runs/ember-qlora/merged`.
-
-#### ✅ Modal training checklist
-- [ ] smoke checks 1–4 pass
-- [ ] full training finished
-- [ ] merge finished
-
----
-
-### Modal serving + evaluation
-
-### E1. Deploy the endpoints
-```bash
-modal deploy training/modal_app.py
-```
-Note the two URLs it prints and add `/v1`:
-- `https://<workspace>--ember-serve-base.modal.run/v1` (stock Muse Glimmer, model name `muse-glimmer`)
-- `https://<workspace>--ember-serve-ember.modal.run/v1` (fine-tuned, model name `ember`)
-
-### E2. Warm them up (the first call loads ~60 GB; can take 5–15 min)
-```bash
-export EMBER_LLM_KEY=<the key from B3>
-curl -s -H "Authorization: Bearer $EMBER_LLM_KEY" https://<base-url>/v1/models
-curl -s -H "Authorization: Bearer $EMBER_LLM_KEY" https://<ember-url>/v1/models
-```
-✅ JSON listing `muse-glimmer` / `ember`. Containers shut down after 20 idle minutes.
-
-### E3. Quick check (1 episode per scenario)
-```bash
-python3 -m training.eval --agent llm --url https://<ember-url>/v1 --model ember --key $EMBER_LLM_KEY --limit 1 --name ember-quick
-```
-✅ Prints metrics with `valid_assessment` near 1.0. If it's 0, check `results/ember-quick.json` → `rows[].error`.
-
-### E4. Full evaluation
-```bash
-python3 -m training.eval --agent llm --url https://<base-url>/v1  --model muse-glimmer --key $EMBER_LLM_KEY --name base
-python3 -m training.eval --agent llm --url https://<ember-url>/v1 --model ember        --key $EMBER_LLM_KEY --name ember
-python3 -m training.eval --report results/heuristic.json results/base.json results/ember.json results/oracle.json
-```
-Paste the table into the README "Results" section (base + EMBER columns). Keep the numbers honest, even where EMBER loses.
-
-#### ✅ Modal serving checklist
-- [ ] both endpoints answer
-- [ ] base + ember evals saved in `results/`
-- [ ] README table filled in
-
----
-
-
-</details>
+Record results as you go in [LEARNING_LOG.md](LEARNING_LOG.md).
 
 ## Phase F: Demo prep
 
 ### F1. Point the dashboard at the fine-tuned model
 ```bash
-export EMBER_LLM_URL=http://localhost:8081/v1       # local llama.cpp (Phase D)
-export EMBER_LLM_MODEL=muse-glimmer
-export EMBER_LLM_EXTRA='{"chat_template_kwargs":{"reasoning_strength":"low"}}'
+scripts/serve_gguf.sh <your fine-tuned .gguf>       # terminal 1 (Phase D / Lab 05)
+export EMBER_LLM_URL=http://localhost:8081/v1 EMBER_LLM_MODEL=local
 python3 -m gateway.server --serial /dev/cu.usbmodem1101 --nodes config/nodes.json --sim quiet \
   --agent llm --auto --show-truth --airtime-budget 120
 ```
@@ -400,7 +235,7 @@ Key beats: real flame → CONFIRM over the radio → verdict; click-to-ignite �
 
 ### F3. Backups
 - Record a full demo video (screen + phone video of the boards).
-- Fallbacks: drop `--serial` (all nodes simulated), or use `--agent heuristic` if Modal is slow.
+- Fallbacks: drop `--serial` (all nodes simulated), or use `--agent heuristic` if the local model is too slow.
 
 ### F4. Five minutes before judging
 Run the `curl .../v1/models` warm-up from E2 and keep the dashboard open.
@@ -422,10 +257,6 @@ Run the `curl .../v1/models` warm-up from E2 and keep the dashboard open.
 | Downloads blocked when Claude Code runs a command | Apple Claude Code's sandbox; run the command yourself in Terminal, or allow the domain in the ACC Dashboard → Domains |
 | Dashboard won't start inside Claude Code (`Operation not permitted`) | The sandbox blocks binding ports; run it in your own Terminal |
 | git author shows `you@<hostname>.local` | `user.email` not set; see A3 |
-| Modal `GatedRepoError` / 401 | HF access not approved or wrong token in the `huggingface` secret |
-| Smoke run: tool calls missing from the rendered text | Axolotl is on the multimodal path; `_ember_config` must pop `processor_type` and `skip_prepare_dataset` |
-| Smoke run: examples > 8192 tokens | Lower `max_events` in `Swarm.context()` or raise `SEQ_LEN` |
-| vLLM: tool calls come back as plain text | The `muse_glimmer` tool parser is missing; check `_vllm()` flags. The agent also falls back to its own ATEM parser |
 | Generation never stops | Never stop on `<|eom|>`; leave the checkpoint's generation config alone (`--generation-config auto`) |
 | Every real node shows as unreliable | Battery token issue; nodes without a divider must omit `b` (fixed in firmware; re-flash) |
 | Flasher: no port in the list | Charge-only cable, or the board isn't in download mode: hold B, tap R, release B. Use Chrome/Edge |
@@ -450,7 +281,7 @@ EMBER is one instance of a general pattern: **an LLM agent that operates a low-b
 6. **Closed-loop edge re-programming**: the agent fixes false positives at the source (`tune_detectors`).
 7. **Physics/digital-twin simulator with ground truth**: generates scenarios, look-alikes and failures (`gateway/sim.py`).
 8. **Teacher trajectories**: an observation-only policy picks tools; ground truth gives the verdict (`gateway/policy.py`, `training/gen_data.py`).
-9. **SFT on Modal with Axolotl QLoRA**, merge, serve on vLLM (`training/modal_app.py`).
+9. **LoRA SFT** with PEFT (Mac MPS for small models, free Kaggle QLoRA for 7–8B), export to GGUF and serve with llama.cpp (`training/sft_lora.py`, `training/export_gguf.sh`, `scripts/serve_gguf.sh`).
 10. **Honest eval**: rule baseline vs base model vs fine-tuned vs oracle, held-out compositions, tight budgets, after-action effect (`training/eval.py`).
 
 ### Files to change for a new domain

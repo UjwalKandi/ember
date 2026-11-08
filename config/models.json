@@ -1,0 +1,25 @@
+{
+  "comment": "Bake-off candidates (Lab 03). gguf = what llama-server downloads (-hf repo:quant); hf = full-precision weights for fine-tuning (Lab 04). 'verify' = I couldn't open Hugging Face from my sandbox: check the repo/quant exists and the license on the model card before relying on it. request_extra is merged into every chat request (e.g. turn off long thinking).",
+  "models": [
+    {"name": "qwen3-0.6b", "size_b": 0.6, "license": "Apache-2.0", "gguf": "Qwen/Qwen3-0.6B-GGUF:Q8_0", "hf": "Qwen/Qwen3-0.6B",
+     "request_extra": {"chat_template_kwargs": {"enable_thinking": false}}, "notes": "fastest iteration, RL-friendly"},
+    {"name": "qwen3-1.7b", "size_b": 1.7, "license": "Apache-2.0", "gguf": "Qwen/Qwen3-1.7B-GGUF:Q8_0", "hf": "Qwen/Qwen3-1.7B",
+     "request_extra": {"chat_template_kwargs": {"enable_thinking": false}}, "notes": "likely sweet spot for Mac SFT"},
+    {"name": "qwen3-4b", "size_b": 4.0, "license": "Apache-2.0", "gguf": "Qwen/Qwen3-4B-GGUF:Q4_K_M", "hf": "Qwen/Qwen3-4B",
+     "request_extra": {"chat_template_kwargs": {"enable_thinking": false}}, "notes": "largest comfortable Mac SFT"},
+    {"name": "llama3.2-1b", "size_b": 1.2, "license": "Llama 3.2 (gated)", "gguf": "bartowski/Llama-3.2-1B-Instruct-GGUF:Q8_0", "hf": "meta-llama/Llama-3.2-1B-Instruct",
+     "request_extra": {}, "notes": "verify GGUF repo; accept license on HF for training"},
+    {"name": "llama3.2-3b", "size_b": 3.2, "license": "Llama 3.2 (gated)", "gguf": "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M", "hf": "meta-llama/Llama-3.2-3B-Instruct",
+     "request_extra": {}, "notes": "Meta family; verify GGUF repo"},
+    {"name": "gemma3-4b", "size_b": 4.3, "license": "Gemma (gated)", "gguf": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "hf": "google/gemma-3-4b-it",
+     "request_extra": {}, "notes": "no native tool template -> exercises EMBER's text fallback"},
+    {"name": "smollm3-3b", "size_b": 3.1, "license": "Apache-2.0", "gguf": "ggml-org/SmolLM3-3B-GGUF:Q4_K_M", "hf": "HuggingFaceTB/SmolLM3-3B",
+     "request_extra": {"chat_template_kwargs": {"enable_thinking": false}}, "notes": "base of TwIL-LM3: clean A/B for webAI's tuning; verify repo"},
+    {"name": "twil-lm3", "size_b": 3.1, "license": "WebAI NonCommercial (verify)", "gguf": "webAI-Official/TwIL-LM3:Q4_K_M", "hf": "webAI-Official/TwIL-LM3",
+     "request_extra": {}, "notes": "webAI reasoning SLM (SmolLM3-3B derivative, <think>); cap reasoning if slow"},
+    {"name": "twil-8b", "size_b": 8.0, "license": "verify on model card", "gguf": "webAI-Official/TwIL-8B:Q4_K_M", "hf": "webAI-Official/TwIL-8B",
+     "request_extra": {}, "notes": "verify a GGUF exists; fine-tune only via Kaggle --qlora"},
+    {"name": "muse-glimmer-30b", "size_b": 30.0, "license": "Apache-2.0", "gguf": "meta-models/Muse-Glimmer-30B-GGUF:kquant-17gb", "hf": "meta-models/Muse-Glimmer-30B",
+     "request_extra": {"chat_template_kwargs": {"reasoning_strength": "low"}}, "notes": "large reference only; ~17 GB, needs sudo sysctl iogpu.wired_limit_mb=20480"}
+  ]
+}
